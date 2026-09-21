@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.fsts.trace.mapper.BatchConfirmRequestMapper">
+
+    <!--
+      待处理进场确认请求分页（接口 11.1）。
+
+      性能要点：
+      1. 驱动表是 batch_confirm_request，过滤条件 (to_enterprise_id, request_status)
+         命中 idx_request_to_enterprise，天然只扫本企业的请求，数据隔离与性能同时满足；
+      2. LEFT JOIN 字典表只为翻译"下游企业类型名称"，字典表极小且走唯一索引；
+      3. 排序字段 request_time 与过滤后的结果集同量级，不会触发全表 filesort。
+    -->
+    <select id="selectRequestPage" resultType="com.fsts.trace.vo.ConfirmRequestListItemVO">
+        SELECT r.id                         AS id,
+               r.request_no                 AS request_no,
+               r.batch_id                   AS batch_id,
+               r.batch_no                   AS batch_no,
+               r.upstream_batch_id          AS upstream_batch_id,
+               r.upstream_batch_no          AS upstream_batch_no,
+               r.from_enterprise_id         AS from_enterprise_id,
+               r.from_enterprise_name       AS from_enterprise_name,
+               e.enterprise_type            AS from_enterprise_type,
+               de.item_value                AS from_enterprise_type_name,
+               r.to_enterprise_id           AS to_enterprise_id,
+               r.to_enterprise_name         AS to_enterprise_name,
+               r.handover_temp              AS handover_temp,
+               r.request_status             AS request_status,
+               rs.item_value                AS request_status_name,
+               r.request_time               AS request_time
+          FROM batch_confirm_request r
+          LEFT JOIN node_enterprise e
+                 ON e.id = r.from_enterprise_id
+          LEFT JOIN sys_dict_item de
+                 ON de.type_code = 'enterprise_type'
+                AND de.item_code = CAST(e.enterprise_type AS CHAR)
+          LEFT JOIN sys_dict_item rs
+                 ON rs.type_code = 'request_status'
+                AND rs.item_code = CAST(r.request_status AS CHAR)
+         WHERE r.to_enterprise_id = #{toEnterpriseId}
+        <if test="q.requestStatus != null">
+           AND r.request_status = #{q.requestStatus}
+        </if>
+        <if test="q.downstreamEnterpriseName != null and q.downstreamEnterpriseName != ''">
+           AND r.from_enterprise_name LIKE CONCAT('%', #{q.downstreamEnterpriseName}, '%')
+        </if>
+        <if test="q.batchNo != null and q.batchNo != ''">
+           AND r.batch_no LIKE CONCAT('%', #{q.batchNo}, '%')
+        </if>
+         ORDER BY r.request_time ASC, r.id ASC
+    </select>
+
+</mapper>

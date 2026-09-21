@@ -1,0 +1,53 @@
+# =============================================================================
+# 冷冻海产品溯源系统 - Git 忽略规则
+# -----------------------------------------------------------------------------
+# 原则：构建产物、运行日志、本地凭据一律不入库。
+# 特别注意：任何包含真实数据库口令、Redis 口令、JWT 密钥的文件都不得提交。
+# =============================================================================
+
+# ---- 构建产物 ----
+target/
+build/
+out/
+*.class
+*.jar
+*.war
+
+# ---- 运行日志 ----
+logs/
+*.log
+*.log.gz
+
+# ---- IDE / 编辑器 ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+*~
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- JVM 诊断文件 ----
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+
+# ---- 本地配置与凭据（严禁提交）----
+application-local.yml
+application-local.yaml
+application-local.properties
+.env
+*.env.local
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore

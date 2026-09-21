@@ -1,0 +1,56 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 多主机故障转移：主库不可达时自动切换；生产建议再加 ProxySQL / MySQL Router 做读写分离
+    url: jdbc:mysql://${FSTS_DB_HOSTS:127.0.0.1:3306}/fsts_trace?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&failOverReadOnly=false&maxReconnects=3&autoReconnect=true
+    username: ${FSTS_DB_USERNAME:fsts}
+    password: ${FSTS_DB_PASSWORD:}
+    hikari:
+      pool-name: FstsHikariPool
+      maximum-pool-size: ${FSTS_DB_POOL_SIZE:50}
+      minimum-idle: 20
+      connection-timeout: 3000
+      validation-timeout: 3000
+      idle-timeout: 600000
+      max-lifetime: 1740000
+      keepalive-time: 120000
+      connection-test-query: SELECT 1
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 500
+        prepStmtCacheSqlLimit: 2048
+        useServerPrepStmts: true
+        rewriteBatchedStatements: true
+        useLocalSessionState: true
+        cacheResultSetMetadata: true
+        cacheServerConfiguration: true
+        elideSetAutoCommits: true
+        maintainTimeStats: false
+  data:
+    redis:
+      host: ${FSTS_REDIS_HOST:127.0.0.1}
+      port: ${FSTS_REDIS_PORT:6379}
+      password: ${FSTS_REDIS_PASSWORD:}
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 64
+          max-idle: 16
+          min-idle: 8
+          max-wait: 1000ms
+        shutdown-timeout: 200ms
+
+fsts:
+  redis:
+    enabled: true
+
+management:
+  health:
+    redis:
+      enabled: true
+
+logging:
+  level:
+    root: warn
+    com.fsts.trace: info

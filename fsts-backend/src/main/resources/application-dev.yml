@@ -1,0 +1,38 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 本地开发单机连接串；生产使用 application-prod.yml 的故障转移连接串
+    url: jdbc:mysql://127.0.0.1:3306/fsts_trace?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    username: ${FSTS_DB_USERNAME:root}
+    password: ${FSTS_DB_PASSWORD:123456}
+    hikari:
+      pool-name: FstsHikariPool
+      # 连接池上限：按 “数据库 max_connections / 实例数” 反推，避免多实例打满数据库
+      maximum-pool-size: 30
+      minimum-idle: 10
+      connection-timeout: 3000
+      validation-timeout: 3000
+      idle-timeout: 600000
+      # 小于 MySQL wait_timeout，避免使用已被服务端关闭的连接
+      max-lifetime: 1740000
+      keepalive-time: 120000
+      connection-test-query: SELECT 1
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 250
+        prepStmtCacheSqlLimit: 2048
+        useServerPrepStmts: true
+        rewriteBatchedStatements: true
+        useLocalSessionState: true
+        cacheResultSetMetadata: true
+        cacheServerConfiguration: true
+        elideSetAutoCommits: true
+        maintainTimeStats: false
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.fsts.trace.mapper: debug

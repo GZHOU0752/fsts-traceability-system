@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.fsts.trace.mapper.NodeEnterpriseMapper">
+
+    <!--
+      大屏概览（接口 7.1）。
+      性能要点：一条 SQL 扫一遍 node_enterprise 即算出全部卡片指标，
+      避免 7 次独立查询带来的 7 次 round-trip；
+      SUM(bool 表达式) 由 MySQL 直接计算，无需子查询。
+      IFNULL 兜底：表空时 SUM 返回 NULL，前端需要 0 而不是 null。
+    -->
+    <select id="selectOverview" resultType="com.fsts.trace.dto.stat.OverviewRow">
+        SELECT COUNT(*)                                                   AS total_count,
+               IFNULL(SUM(enterprise_type = 1), 0)                        AS fishing_count,
+               IFNULL(SUM(enterprise_type = 2), 0)                        AS processing_count,
+               IFNULL(SUM(enterprise_type = 3), 0)                        AS wholesale_count,
+               IFNULL(SUM(enterprise_type = 4), 0)                        AS retail_count,
+               COUNT(DISTINCT province_code)                              AS province_count,
+               IFNULL(SUM(DATE(register_time) = CURDATE()), 0)            AS today_register_count
+          FROM node_enterprise
+         WHERE deleted = 0
+    </select>
+
+    <!--
+      月度注册趋势（接口 7.2）。
+      索引：register_time 上已有 idx_enterprise_register_time，范围扫描即可；
+      不在 SQL 里补齐空月份 —— 横轴连续性由服务层按当前月向前推 12 个月生成，
+      保证图表横轴不断裂。
+    -->
+    <select id="selectRegisterTrend" resultType="com.fsts.trace.dto.stat.RegisterTrendRow">
+        SELECT DATE_FORMAT(register_time, '%Y-%m') AS month,
+               COUNT(*)                            AS cnt
+          FROM node_enterprise
+         WHERE deleted = 0
+           AND register_time &gt;= #{startMonth}
+         GROUP BY month
+         ORDER BY month ASC
+    </select>
+
+    <!--
+      省分组注册数量（接口 7.3 / 7.4）。
+      先按省份聚合再排序：COUNT(*) 走 idx_enterprise_region 的覆盖扫描，
+      排序在聚合结果集上进行，代价与省份数量（最多 34）相关，与总行数无关。
+      次级排序用 province_code 保证结果稳定（避免同数量省份顺序漂移导致前端图表抖动）。
+    -->
+    <select id="selectProvinceStat" resultType="com.fsts.trace.dto.stat.ProvinceStatRow">
+        SELECT province_code,
+               province_name,
+               COUNT(*) AS cnt
+          FROM node_enterprise
+         WHERE deleted = 0
+         GROUP BY province_code, province_name
+         ORDER BY cnt DESC, province_code ASC
+    </select>
+
+    <!--
+      企业类型分布（接口 7.5）。
+      企业类型名称来自字典表，用 LEFT JOIN 保证字典缺失时记录不丢（名称为 null）。
+    -->
+    <select id="selectTypeStat" resultType="com.fsts.trace.dto.stat.TypeStatRow">
+        SELECT e.enterprise_type                       AS enterprise_type,
+               d.item_value                            AS enterprise_type_name,
+               COUNT(*)                                AS cnt
+          FROM node_enterprise e
+          LEFT JOIN sys_dict_item d
+                 ON d.type_code = 'enterprise_type'
+                AND d.item_code = CAST(e.enterprise_type AS CHAR)
+         WHERE e.deleted = 0
+         GROUP BY e.enterprise_type, d.item_value
+         ORDER BY e.enterprise_type ASC
+    </select>
+
+</mapper>
