@@ -41,6 +41,7 @@ hs_err_pid*.log
 replay_pid*.log
 
 # ---- 本地配置与凭据（严禁提交）----
+push-to-github.ps1
 application-local.yml
 application-local.yaml
 application-local.properties
