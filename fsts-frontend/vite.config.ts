@@ -11,6 +11,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // 监听局域网：手机扫码打开的是本机内网地址，只监听 localhost 时手机连不上
+    host: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8080',

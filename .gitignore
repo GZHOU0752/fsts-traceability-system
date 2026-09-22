@@ -19,6 +19,12 @@ logs/
 *.log
 *.log.gz
 
+# ---- 本地服务运行时状态（PID / 日志，由 start-services.ps1 生成）----
+.run/
+
+# ---- 浏览器自动化临时产物（playwright-cli 的会话快照 / 截图）----
+.playwright-cli/
+
 # ---- IDE / 编辑器 ----
 .idea/
 *.iml
