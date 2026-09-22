@@ -1,0 +1,2 @@
+<script setup lang="ts">defineProps<{ total: number; page: number; size: number }>(); const emit = defineEmits<{ change: [page: number]; 'update:size': [size: number] }>()</script>
+<template><div class="pagination-bar"><span>共 {{ total }} 条记录</span><el-pagination background layout="sizes, prev, pager, next" :total="total" :current-page="page" :page-size="size" :page-sizes="[10, 20, 50]" @current-change="(value: number) => emit('change', value)" @size-change="(value: number) => emit('update:size', value)" /></div></template>

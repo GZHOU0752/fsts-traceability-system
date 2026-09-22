@@ -1,0 +1,2 @@
+<script setup lang="ts">import type { TraceLink } from '@/types/domain'; defineProps<{ links: TraceLink[] }>()</script>
+<template><div class="trace-chain"><div v-for="(link, index) in links" :key="`${link.stageCode}-${link.batchNo}`" class="trace-chain__node"><div class="trace-chain__index">0{{ index + 1 }}</div><div><strong>{{ link.stageName }}</strong><p>{{ link.enterpriseName }}</p><small>{{ link.provinceName }}{{ link.cityName }} · {{ link.batchNo }}</small></div><i v-if="index < links.length - 1"></i></div></div></template>

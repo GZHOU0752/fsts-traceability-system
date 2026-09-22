@@ -9,6 +9,7 @@
 target/
 build/
 out/
+output/
 *.class
 *.jar
 *.war

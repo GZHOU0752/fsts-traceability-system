@@ -1,0 +1,395 @@
+/* ==========================================================================
+   FSTS 主题层
+   --------------------------------------------------------------------------
+   global.css 负责布局与业务组件骨架，本文件只做两件事：
+     1. 把 Element Plus 的默认蓝色皮肤换成 FSTS 的青绿品牌色，
+        否则分页器、输入框聚焦态、下拉菜单等会与自定义样式“撞色”；
+     2. 对表格、卡片、弹窗、空状态等高频组件做统一的细节抛光。
+   所有覆盖都基于 Element Plus 暴露的 CSS 变量，升级组件库时改动面最小。
+   ========================================================================== */
+
+:root {
+  /* —— 品牌主色：青绿（与 tokens.css 的 --teal-600 保持一致） —— */
+  --el-color-primary: #118b82;
+  --el-color-primary-light-3: #3ba49b;
+  --el-color-primary-light-5: #6dbab2;
+  --el-color-primary-light-7: #a2d3cd;
+  --el-color-primary-light-8: #bce0db;
+  --el-color-primary-light-9: #e2f5f1;
+  --el-color-primary-dark-2: #0c6f68;
+
+  /* —— 语义色：与图表配色同源，避免“两套红黄绿” —— */
+  --el-color-success: #14917f;
+  --el-color-success-light-9: #e6f5f1;
+  --el-color-warning: #d9932f;
+  --el-color-warning-light-9: #fff5df;
+  --el-color-danger: #d4564e;
+  --el-color-danger-light-9: #fdeeed;
+  --el-color-error: #d4564e;
+  --el-color-info: #708895;
+  --el-color-info-light-9: #eef3f4;
+
+  /* —— 文字与描边 —— */
+  --el-text-color-primary: #102b3f;
+  --el-text-color-regular: #416375;
+  --el-text-color-secondary: #708895;
+  --el-text-color-placeholder: #9fb2bc;
+  --el-border-color: #dce9e5;
+  --el-border-color-light: #e5efec;
+  --el-border-color-lighter: #eef5f3;
+  --el-fill-color-light: #f5f9f8;
+  --el-fill-color-lighter: #f8fbfa;
+
+  /* —— 形状与字体 —— */
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 8px;
+  --el-font-family: Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --el-box-shadow-light: 0 6px 20px rgba(20, 57, 70, 0.08);
+}
+
+/* --------------------------------------------------------------------------
+   按钮
+   -------------------------------------------------------------------------- */
+.el-button {
+  border-radius: 9px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, background-color 0.2s ease;
+}
+
+.el-button--large {
+  border-radius: 12px;
+}
+
+.el-button--primary:not(.is-link):not(.is-text) {
+  box-shadow: 0 6px 16px rgba(17, 139, 130, 0.22);
+}
+
+.el-button--primary:not(.is-link):not(.is-text):hover {
+  box-shadow: 0 10px 22px rgba(17, 139, 130, 0.3);
+  transform: translateY(-1px);
+}
+
+.el-button.is-link,
+.el-button.is-text {
+  box-shadow: none;
+  transform: none;
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   输入类控件的聚焦态：用柔和的青色光晕替代默认灰边
+   -------------------------------------------------------------------------- */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: 9px;
+  transition: box-shadow 0.2s ease;
+}
+
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset, 0 0 0 3px rgba(32, 167, 154, 0.12);
+}
+
+/* --------------------------------------------------------------------------
+   表格
+   -------------------------------------------------------------------------- */
+.el-table {
+  --el-table-header-bg-color: #f6fafa;
+  --el-table-header-text-color: #416375;
+  --el-table-border-color: #eef5f3;
+  --el-table-row-hover-bg-color: #f3faf8;
+  font-size: 13px;
+}
+
+.el-table th.el-table__cell {
+  height: 46px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.el-table td.el-table__cell {
+  padding: 13px 0;
+}
+
+.el-table .cell {
+  padding: 0 14px;
+  line-height: 1.55;
+}
+
+.el-table__inner-wrapper::before {
+  background-color: var(--el-table-border-color);
+}
+
+/* 操作列里三个链接按钮在窄列中容易折行，收窄外边距与内边距 */
+.el-table .el-button + .el-button {
+  margin-left: 8px;
+}
+
+.el-table .el-button.is-link {
+  padding: 2px 0;
+}
+
+/* --------------------------------------------------------------------------
+   分页器（默认蓝色是主题不一致最明显的一处）
+   -------------------------------------------------------------------------- */
+.el-pagination {
+  --el-pagination-font-size: 13px;
+  --el-pagination-button-height: 30px;
+  --el-pagination-button-width: 30px;
+  font-weight: 600;
+}
+
+.el-pagination.is-background .el-pager li,
+.el-pagination.is-background .btn-prev,
+.el-pagination.is-background .btn-next {
+  border-radius: 8px;
+  background: #f1f7f5;
+  color: var(--ink-700);
+}
+
+.el-pagination.is-background .el-pager li:not(.is-disabled):hover,
+.el-pagination.is-background .btn-prev:not(:disabled):hover,
+.el-pagination.is-background .btn-next:not(:disabled):hover {
+  color: var(--el-color-primary);
+}
+
+.el-pagination.is-background .el-pager li.is-active {
+  background: var(--el-color-primary);
+  box-shadow: 0 4px 12px rgba(17, 139, 130, 0.28);
+}
+
+/* --------------------------------------------------------------------------
+   标签 / 卡片 / 弹层
+   -------------------------------------------------------------------------- */
+.el-tag {
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.el-card {
+  box-shadow: 0 1px 2px rgba(16, 43, 63, 0.04), 0 16px 32px -18px rgba(20, 57, 70, 0.22);
+}
+
+.el-dialog {
+  border-radius: 16px;
+  box-shadow: 0 28px 64px rgba(16, 43, 63, 0.2);
+}
+
+.el-dialog__header {
+  padding: 22px 24px 4px;
+}
+
+.el-dialog__title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink-950);
+}
+
+.el-dialog__body {
+  padding: 14px 24px 20px;
+}
+
+.el-dialog__footer {
+  padding: 6px 24px 22px;
+}
+
+.el-drawer__header {
+  margin-bottom: 0;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid var(--mist-100);
+  color: var(--ink-950);
+  font-weight: 700;
+}
+
+.el-drawer__body {
+  padding: 22px 24px;
+}
+
+.el-dropdown-menu__item {
+  font-size: 13px;
+}
+
+.el-message-box {
+  border-radius: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   业务组件抛光
+   -------------------------------------------------------------------------- */
+
+/* 面板阴影：默认阴影偏“平”，换成更贴近纸面的双层阴影 */
+.data-panel {
+  box-shadow: 0 1px 2px rgba(16, 43, 63, 0.04), 0 16px 32px -18px rgba(20, 57, 70, 0.22);
+}
+
+/* 面板标题与副标题原先在非图表面板里贴在一起，统一成两行叠放 */
+.data-panel__head > div {
+  display: grid;
+  gap: 5px;
+}
+
+.data-panel__head strong {
+  letter-spacing: -0.2px;
+}
+
+.data-panel__head > span {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+/* 筛选条与表格面板之间的节奏 */
+.filter-bar {
+  margin-bottom: 16px;
+}
+
+/* 页头：操作按钮与标题垂直居中对齐，避免按钮落在描述行 */
+.page-header {
+  align-items: center;
+}
+
+.page-header h1 {
+  font-size: 27px;
+}
+
+/* 指标卡：悬浮微交互 + 趋势行排版 */
+.metric-card {
+  /* 首张卡片没有 tone 修饰类，若不指定会退化成墨蓝，装饰圆也随之发灰 */
+  color: var(--teal-600);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+/* 角标装饰圆收进右下角，避免压住“今日新增”文字 */
+.metric-card::after {
+  right: -30px;
+  bottom: -44px;
+  width: 118px;
+  height: 118px;
+  opacity: 0.08;
+}
+
+.metric-card:hover {
+  border-color: var(--mist-200);
+  box-shadow: 0 18px 36px -16px rgba(20, 57, 70, 0.28);
+  transform: translateY(-3px);
+}
+
+.metric-card > strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-card > small {
+  gap: 5px;
+  font-weight: 600;
+}
+
+/* DashboardView 里的 <ArrowUp /> 是裸 SVG（没有 el-icon 包裹），
+   元素库不会给它 1em 尺寸，这里显式约束，否则会被撑成一枚巨大的箭头。 */
+.metric-card > small svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
+/* 空状态：给图标一个柔和底托，避免孤零零一枚线框图标 */
+.empty-state > .el-icon {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 4px;
+  place-items: center;
+  border-radius: 20px;
+  background: var(--mist-100);
+  color: var(--teal-600);
+}
+
+/* 侧边栏：纯黑底改成有深浅过渡的深蓝，减少“死板一块” */
+.sidebar {
+  background: linear-gradient(180deg, #0d2537 0%, #102b3f 48%, #123246 100%);
+}
+
+.side-nav__item.is-active {
+  background: linear-gradient(90deg, rgba(32, 167, 154, 0.26), rgba(40, 85, 106, 0.55));
+}
+
+.side-nav__item {
+  font-weight: 500;
+}
+
+.login-submit {
+  height: 48px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+
+/* 登录页脱离 PublicLayout 后，用一枚悬浮胶囊保留回到公开溯源页的入口，
+   避免企业/管理员登录页成为导航死角 */
+.bare-back {
+  position: fixed;
+  z-index: 5;
+  bottom: 26px;
+  left: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #cfe3e0;
+  font-size: 12px;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.bare-back:hover {
+  border-color: rgba(123, 214, 197, 0.55);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+@media (max-width: 980px) {
+  .bare-back {
+    bottom: 18px;
+    left: 18px;
+  }
+}
+
+/* 公共溯源页 */
+.trace-section,
+.trace-summary {
+  box-shadow: 0 1px 2px rgba(16, 43, 63, 0.04), 0 16px 32px -18px rgba(20, 57, 70, 0.22);
+}
+
+/* --------------------------------------------------------------------------
+   全局细节
+   -------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--teal-500);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-color: #c6d8d4 transparent;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: #c6d8d4;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a6c2bd;
+  background-clip: content-box;
+}
