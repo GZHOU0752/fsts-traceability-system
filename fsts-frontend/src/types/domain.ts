@@ -164,9 +164,12 @@ export interface UpstreamBatch { id: string; batchNo: string; productVariety?: s
 export interface ConfirmRequest { id: string; requestNo: string; batchId: string; batchNo: string; upstreamBatchId?: string; upstreamBatchNo?: string; fromEnterpriseId?: string; fromEnterpriseName?: string; fromEnterpriseType?: number; fromEnterpriseTypeName?: string; toEnterpriseId?: string; toEnterpriseName?: string; handoverTemp?: number; requestStatus: number; requestStatusName: string; requestTime?: string }
 export interface ConfirmRequestDetail extends ConfirmRequest { handleTime?: string; handleRemark?: string; downstreamBatch?: Record<string, unknown>; upstreamBatch?: Record<string, unknown> }
 
-export interface TemperaturePoint { stageName?: string; enterpriseName?: string; temperature?: number; time?: string; qualified?: boolean }
-export interface Certificate { name?: string; number?: string; typeName?: string }
-export interface TraceLink { stageCode: number; stageName: string; enterpriseName: string; enterpriseTypeName?: string; provinceName?: string; cityName?: string; batchNo?: string; upstreamBatchNo?: string; productVariety?: string; sourceTypeName?: string; handoverTemp?: number; coldChainOk?: boolean; handoverTime?: string; certificates?: Certificate[]; temperatures?: TemperaturePoint[] }
+// 字段名以《前后端接口文档》12.1 的响应示例为准：曲线点用 recordTime 携带采样时间，并带合格阈值 threshold。
+export interface TemperaturePoint { stageCode?: number; stageName?: string; enterpriseName?: string; temperature?: number; threshold?: number; recordTime?: string; qualified?: boolean }
+// 环节内的温度明细（links[].temperatures）与曲线点结构不同：这里是「记录项名称 + 数值」。
+export interface TemperatureReading { name?: string; value?: number; threshold?: number; qualified?: boolean }
+export interface Certificate { name?: string; no?: string }
+export interface TraceLink { stageCode: number; stageName: string; enterpriseName: string; enterpriseTypeName?: string; provinceName?: string; cityName?: string; batchNo?: string; upstreamBatchNo?: string; productVariety?: string; sourceTypeName?: string; handoverTemp?: number; coldChainOk?: boolean; handoverTime?: string; certificates?: Certificate[]; temperatures?: TemperatureReading[] }
 export interface PublicTrace { traceCode: string; batchNo: string; productVariety?: string; retailerName?: string; saleStore?: string; generateTime?: string; queryCount?: number; coldChainQualified?: boolean; coldChainConclusion?: string; temperatureCurve?: TemperaturePoint[]; links: TraceLink[] }
 
 export type Paged<T> = PageResult<T>
