@@ -12,12 +12,15 @@ import com.fsts.trace.entity.ProductBatch;
 import com.fsts.trace.entity.TraceCode;
 import com.fsts.trace.mapper.TraceCodeMapper;
 import com.fsts.trace.support.sequence.SequenceService;
+import com.fsts.trace.vo.PublicProductVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 溯源标识码服务（接口 10.10 / 11.3 / 12.1）。
@@ -129,5 +132,25 @@ public class TraceCodeService {
         if (affected > 0) {
             log.info("溯源标识码已失效: batchId={}", batchId);
         }
+    }
+
+    /**
+     * 消费者端产品搜索：返回可溯源的已发布产品列表。
+     */
+    public List<PublicProductVO> searchProducts(String keyword) {
+        String kw = keyword == null ? "" : keyword.trim();
+        List<TraceCode> list = traceCodeMapper.searchProducts(kw);
+        List<PublicProductVO> result = new ArrayList<>(list.size());
+        for (TraceCode item : list) {
+            result.add(PublicProductVO.builder()
+                    .traceCode(item.getTraceCode())
+                    .batchNo(item.getBatchNo())
+                    .productVariety(item.getProductVariety())
+                    .retailerName(item.getRetailerName())
+                    .saleStore(item.getSaleStore())
+                    .generateTime(item.getGenerateTime())
+                    .build());
+        }
+        return result;
     }
 }

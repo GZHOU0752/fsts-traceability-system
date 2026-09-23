@@ -172,5 +172,7 @@ export interface Certificate { name?: string; no?: string }
 export interface TraceLink { stageCode: number; stageName: string; enterpriseName: string; enterpriseTypeName?: string; provinceName?: string; cityName?: string; batchNo?: string; upstreamBatchNo?: string; productVariety?: string; sourceTypeName?: string; handoverTemp?: number; coldChainOk?: boolean; handoverTime?: string; certificates?: Certificate[]; temperatures?: TemperatureReading[] }
 export interface PublicTrace { traceCode: string; batchNo: string; productVariety?: string; retailerName?: string; saleStore?: string; generateTime?: string; queryCount?: number; coldChainQualified?: boolean; coldChainConclusion?: string; temperatureCurve?: TemperaturePoint[]; links: TraceLink[] }
 
+export interface PublicProduct { traceCode: string; batchNo: string; productVariety?: string; retailerName?: string; saleStore?: string; generateTime?: string }
+
 export type Paged<T> = PageResult<T>
 export type WithPage<T> = PageQuery & T
