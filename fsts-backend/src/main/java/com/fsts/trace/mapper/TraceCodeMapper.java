@@ -7,6 +7,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
+
 /**
  * 溯源标识码 Mapper。
  */
@@ -18,6 +20,17 @@ public interface TraceCodeMapper extends BaseMapper<TraceCode> {
      */
     @Select("SELECT * FROM trace_code WHERE trace_code = #{traceCode}")
     TraceCode selectByTraceCode(@Param("traceCode") String traceCode);
+
+    /**
+     * 消费者端产品搜索：按产品名称模糊匹配仍有效的溯源标识码。
+     */
+    @Select("""
+            SELECT * FROM trace_code
+             WHERE status = 1 AND product_variety LIKE CONCAT('%', #{keyword}, '%')
+             ORDER BY generate_time DESC
+             LIMIT 50
+            """)
+    List<TraceCode> searchProducts(@Param("keyword") String keyword);
 
     /**
      * 累加查询次数（由 TraceQueryCounter 聚合后批量调用，不在读路径同步执行）。
