@@ -37,9 +37,11 @@ import java.util.Map;
  * 消费者端 - 溯源链组装（接口 12.1）。
  *
  * <p><b>性能设计：</b>
- * 1. 查询次数固定为 6 次 SQL（1 次标识码 + 1 次递归链 + 4 次明细），
+ * 1. SQL 次数上限固定：1 次标识码 + 1 次递归链 + 1 次企业 + 至多 4 次明细，
  *    与链条长度无关，不存在 N+1；
- * 2. 明细表按 batch_id 批量 IN 查询，命中唯一索引；
+ * 2. 明细表按实际出现的环节按需查询：只有捕捞环节的批次不再为加工/批发/零售
+ *    三张表各发一次空查询（单品链路由 6 次降到 3 次）；确实存在时按 batch_id
+ *    批量 IN 查询，命中唯一索引；
  * 3. 查询次数不在此处写库，而是交给 {@link TraceQueryCounter} 内存聚合，
  *    读路径完全无写操作。
  *
@@ -105,13 +107,30 @@ public class TraceChainService {
                 b.getEnterpriseType() == null ? 0 : b.getEnterpriseType()));
 
         List<Long> batchIds = new ArrayList<>(chain.size());
+        boolean hasFishing = false;
+        boolean hasProcessing = false;
+        boolean hasWholesale = false;
+        boolean hasRetail = false;
         for (ProductBatch batch : chain) {
             batchIds.add(batch.getId());
+            Integer type = batch.getEnterpriseType();
+            if (type == null) {
+                continue;
+            }
+            switch (type) {
+                case Constants.ENTERPRISE_TYPE_FISHING -> hasFishing = true;
+                case Constants.ENTERPRISE_TYPE_PROCESSING -> hasProcessing = true;
+                case Constants.ENTERPRISE_TYPE_WHOLESALE -> hasWholesale = true;
+                case Constants.ENTERPRISE_TYPE_RETAIL -> hasRetail = true;
+                default -> {
+                    // 未知环节没有对应明细表
+                }
+            }
         }
-        Map<Long, BatchFishing> fishingMap = indexFishing(batchIds);
-        Map<Long, BatchProcessing> processingMap = indexProcessing(batchIds);
-        Map<Long, BatchWholesale> wholesaleMap = indexWholesale(batchIds);
-        Map<Long, BatchRetail> retailMap = indexRetail(batchIds);
+        Map<Long, BatchFishing> fishingMap = hasFishing ? indexFishing(batchIds) : Collections.emptyMap();
+        Map<Long, BatchProcessing> processingMap = hasProcessing ? indexProcessing(batchIds) : Collections.emptyMap();
+        Map<Long, BatchWholesale> wholesaleMap = hasWholesale ? indexWholesale(batchIds) : Collections.emptyMap();
+        Map<Long, BatchRetail> retailMap = hasRetail ? indexRetail(batchIds) : Collections.emptyMap();
         Map<Long, NodeEnterprise> enterpriseMap = indexEnterprise(chain);
 
         List<TraceLinkVO> links = new ArrayList<>(chain.size());

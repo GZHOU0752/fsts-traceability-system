@@ -32,8 +32,9 @@
   /* —— 文字与描边 —— */
   --el-text-color-primary: #102b3f;
   --el-text-color-regular: #416375;
-  --el-text-color-secondary: #708895;
-  --el-text-color-placeholder: #9fb2bc;
+  /* 次要文字与占位符按 AA 对比度取值：白底分别 5.0:1 / 4.7:1 */
+  --el-text-color-secondary: #5a7280;
+  --el-text-color-placeholder: #64777f;
   --el-border-color: #dce9e5;
   --el-border-color-light: #e5efec;
   --el-border-color-lighter: #eef5f3;
@@ -43,7 +44,7 @@
   /* —— 形状与字体 —— */
   --el-border-radius-base: 10px;
   --el-border-radius-small: 8px;
-  --el-font-family: Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --el-font-family: var(--font-sans);
   --el-box-shadow-light: 0 6px 20px rgba(20, 57, 70, 0.08);
 }
 
@@ -131,6 +132,12 @@
 
 .el-table .el-button.is-link {
   padding: 2px 0;
+}
+
+/* 操作列强制单行：列宽不足时宁可整表横向滚动，也不要把按钮挤成三行。
+   配合 el-table-column 的 class-name="table-actions" 使用。 */
+.el-table .table-actions .cell {
+  white-space: nowrap;
 }
 
 /* --------------------------------------------------------------------------
@@ -392,4 +399,73 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #a6c2bd;
   background-clip: content-box;
+}
+
+/* --------------------------------------------------------------------------
+   第二轮抛光：图表节奏、指标卡装饰、二维码长链接
+   -------------------------------------------------------------------------- */
+
+/* 仪表盘栅格：12 个月的折线图与 9 个省份的柱状图都需要横向空间，
+   改成一列一张宽图、两个环形图并排，解决窄列里省份标签互相挤压的问题。 */
+.dashboard-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-grid .chart-panel--wide {
+  grid-column: 1 / -1;
+}
+
+/* 图表面板改成纵向 flex：图例/坐标轴撑满面板高度，
+   消除环形图下方那块与折线图等高留下的空白。 */
+.dashboard-grid .chart-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-grid .chart-panel .chart {
+  height: auto;
+  min-height: 262px;
+  flex: 1 1 auto;
+}
+
+/* 本段规则写在文件末尾，权重相同会覆盖上面的 980px 适配，所以这里补回单列。 */
+@media (max-width: 980px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-grid .chart-panel--wide {
+    grid-column: auto;
+  }
+}
+
+/* 指标卡右下角的装饰圆改成柔光晕：原来的实心圆在浅色卡片上会读成"没做完的灰圆片"，
+   换成径向渐变后边缘自然衰减，颜色仍取卡片自身的 tone。 */
+.metric-card::after {
+  right: -64px;
+  bottom: -80px;
+  width: 190px;
+  height: 190px;
+  background: radial-gradient(circle at 50% 50%, currentColor 0%, transparent 68%);
+  opacity: 0.16;
+}
+
+/* 二维码下方的链接很长（局域网地址 + 溯源码 + scan 参数），
+   原来会折成三行并挤压卡片，改为单行省略，完整地址仍在 title 与二维码里。 */
+.trace-qr__link {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+/* 登录页底部提示原本用 --ink-300（白底约 1.9:1），改成次要文字色 */
+.login-note {
+  color: var(--ink-500);
+}
+
+/* 登录页文案精简后表单区内容变短，品牌与标题之间 86px 的间距显得空旷 */
+.login-brand {
+  margin-bottom: 56px;
 }

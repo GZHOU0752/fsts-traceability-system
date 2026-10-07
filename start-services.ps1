@@ -6,7 +6,7 @@
 .DESCRIPTION
     按依赖顺序启动三件套，并且每一步都做真实验证，而不是"进程起来了就算成功"：
       1. 数据库：确认 MySQL 服务在运行、3306 可连接、fsts_trace 已初始化；
-      2. 后端  ：Jar 缺失时先 mvn package，再以 dev profile 启动，轮询 /actuator/health 直到 UP；
+      2. 后端  ：Jar 缺失或源码比 Jar 新时自动 mvn package，再以 dev profile 启动，轮询 /actuator/health 直到 UP；
       3. 前端  ：node_modules 缺失时先 npm install，再启动 Vite，轮询首页可访问。
 
     后端与前端以隐藏窗口后台运行，日志写入 .run\logs\，PID 写入 .run\state.json，
@@ -32,7 +32,12 @@
     注意：建表脚本会 DROP 并重建 12 张业务表，演示数据会覆盖现有业务数据，属于破坏性操作。
 
 .PARAMETER RebuildBackend
-    强制重新执行 mvn clean package（源码改动后需要，否则跑的还是旧 Jar）。
+    强制重新执行 mvn clean package。后端源码比现有 Jar 新时脚本会自动重建，
+    只有需要"无条件重编"时才需要手动加这个开关。
+
+.PARAMETER Wait
+    值守模式：脚本自身保持前台不退出，关闭该窗口（或按 Ctrl+C）会自动停止本次启动的后端与前端，
+    不会再留下"窗口关了、进程还在"的情况。双击 start-services.bat 时默认开启。
 
 .PARAMETER SkipDatabase / SkipBackend / SkipFrontend
     跳过对应环节（例如只重启前端时用 -SkipDatabase -SkipBackend）。
@@ -42,6 +47,7 @@
 
 .EXAMPLE
     pwsh -File start-services.ps1
+    pwsh -File start-services.ps1 -Wait
     pwsh -File start-services.ps1 -Action status
     pwsh -File start-services.ps1 -Action down
     pwsh -File start-services.ps1 -InitDatabase -RebuildBackend
@@ -51,7 +57,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('up', 'down', 'status', 'restart')]
+    [ValidateSet('up', 'down', 'status', 'restart', 'watchdog')]
     [string]$Action = 'up',
 
     [string]$DbPassword,
@@ -68,7 +74,11 @@ param(
     [switch]$SkipFrontend,
     [switch]$StopDatabase,
     [switch]$OpenBrowser,
-    [switch]$PauseAtEnd
+    [switch]$PauseAtEnd,
+    [switch]$Wait,
+
+    # 内部参数：看门狗监听的主进程 PID（见 -Action watchdog）
+    [int]$ParentPid = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -163,6 +173,134 @@ function Get-TailLines {
     return @(Get-Content -LiteralPath $Path -Tail $Count -ErrorAction SilentlyContinue)
 }
 
+function Get-PortOwnerText {
+    param([int]$Port)
+
+    $ownerIds = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique)
+    $names = foreach ($procId in $ownerIds) {
+        $process = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($process) { $process.ProcessName + ' (PID ' + $procId + ')' } else { 'PID ' + $procId }
+    }
+    return ($names -join ', ')
+}
+
+function Get-PortOwnerCommandLine {
+    param([int]$Port)
+
+    $lines = foreach ($procId in @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique)) {
+        $info = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+        if ($info) { [string]$info.CommandLine }
+    }
+    return ($lines -join "`n")
+}
+
+function Test-BackendPortOwnerIsOurs {
+    # 本项目的后端命令行里一定带 fsts（jar 名，或 IDE 运行时的 com.fsts 主类/类路径）；
+    # 本机 8080 上可能同时跑着别的项目（例如云墨也是 Spring Boot + actuator），
+    # 只靠 /actuator/health 返回 UP 会认错人，所以这里再确认一次进程身份。
+    return ((Get-PortOwnerCommandLine -Port $BackendPort) -match '(?i)fsts')
+}
+
+function Get-BackendHealthStatus {
+    # 本机 8080 可能同时跑着别的项目（它们对未知路径也会返回 HTTP 200 的错误包），
+    # 所以只有拿到真正的 actuator health JSON 才算数。
+    # /actuator/health 的 Content-Type 是 vnd.spring-boot.actuator.v3+json，
+    # Invoke-WebRequest 会把 Content 还原成字节数组，这里用 Invoke-RestMethod 直接拿对象。
+    $url = 'http://localhost:' + $BackendPort + '/actuator/health'
+    try {
+        $health = Invoke-RestMethod -Uri $url -TimeoutSec 5
+    } catch {
+        return $null
+    }
+    if (-not $health -or -not $health.status) { return $null }
+    return [string]$health.status
+}
+
+function Test-BackendUp {
+    return ((Get-BackendHealthStatus) -eq 'UP')
+}
+
+function Wait-BackendUp {
+    param([int]$Seconds)
+
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-BackendUp) { return $true }
+        Start-Sleep -Milliseconds 1500
+    }
+    return (Test-BackendUp)
+}
+
+function Wait-PortReleased {
+    param([int]$Port, [int]$Seconds)
+
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-PortListening $Port)) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return (-not (Test-PortListening $Port))
+}
+
+function Invoke-NativeCommand {
+    param([string]$FilePath, [string[]]$ArgumentList)
+
+    # mvn / npm 会把警告写到 stderr，而 Windows PowerShell 5.1 在 Stop 偏好下会把原生命令的
+    # stderr 当成 NativeCommandError 直接中断脚本；这里临时降级，并让输出照常打到控制台。
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $FilePath @ArgumentList | Out-Host
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
+function Get-LatestBackendSourceTime {
+    $latest = Get-ChildItem -LiteralPath $BackendDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FullName -notmatch '[\\/]target[\\/]' -and
+            ($_.Extension -in @('.java', '.xml', '.yml', '.yaml', '.sql', '.properties'))
+        } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($latest) { return $latest.LastWriteTime }
+    return [datetime]::MinValue
+}
+
+function Get-JarHolderProcessIds {
+    param([string]$JarPath)
+
+    # Windows 会锁住正在运行的 Jar，边跑边重打包会失败，甚至把 fat jar 覆盖成瘦 jar
+    $jarName = Split-Path -Leaf $JarPath
+    return @(Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$jarName*" } |
+        Select-Object -ExpandProperty ProcessId)
+}
+
+function Stop-FstsBackendForRebuild {
+    # 先确认占用端口的是本项目的 Jar 进程，再停止它；绝不盲目杀端口占用者
+    $ownerIds = @(Get-NetTCPConnection -State Listen -LocalPort $BackendPort -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique)
+
+    foreach ($procId in $ownerIds) {
+        $info = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+        $commandLine = if ($info) { [string]$info.CommandLine } else { '' }
+        if (-not $info -or $info.Name -ne 'java.exe' -or $commandLine -notmatch '(?i)fsts') {
+            throw ('端口 ' + $BackendPort + ' 被非本项目进程占用（' + (Get-PortOwnerText -Port $BackendPort) + '），拒绝盲目终止，请先手动停止它。')
+        }
+        Write-Step ('停止旧后端进程 PID ' + $procId + '，准备重新编译')
+        Stop-Process -Id $procId -Force -ErrorAction Stop
+    }
+
+    if ($ownerIds.Count -gt 0 -and -not (Wait-PortReleased -Port $BackendPort -Seconds 15)) {
+        throw ('旧后端没有释放端口 ' + $BackendPort)
+    }
+}
+
 # ---------------------------------------------------------------------------
 # 状态文件
 # ---------------------------------------------------------------------------
@@ -176,7 +314,48 @@ function Read-RunState {
 function Save-RunState {
     param($State)
     Ensure-Directory $RunDir
+
+    # 上一次会话可能还在前台值守：本次没接管的服务（复用/跳过）要把旧记录留着，
+    # 否则那个窗口关闭时就找不到自己启动的进程了。
+    $previous = Read-RunState
+    if ($previous) {
+        foreach ($name in @('backend', 'frontend')) {
+            if ($State.$name -or -not $previous.$name) { continue }
+            if (Test-RecordedEntryAlive -Entry $previous.$name) { $State.$name = $previous.$name }
+        }
+    }
+
+    # 记下进程启动时间（ticks），回收时用它确认 PID 没有被别的进程复用。
+    # 必须存字符串：JSON 会把 ISO 时间串自动解析成 DateTime，反而不好比对。
+    foreach ($entry in @($State.backend, $State.frontend)) {
+        if (-not $entry -or -not $entry.pid) { continue }
+        $ticks = Get-ProcessStartTicks -ProcessId ([int]$entry.pid)
+        if ($ticks) {
+            $entry | Add-Member -NotePropertyName startTicks -NotePropertyValue $ticks -Force
+        }
+    }
     ($State | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $StateFile -Encoding UTF8
+}
+
+function Get-ProcessStartTicks {
+    param([int]$ProcessId)
+
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $process) { return $null }
+    try { return $process.StartTime.Ticks.ToString() } catch { return $null }
+}
+
+function Test-RecordedEntryAlive {
+    param($Entry)
+
+    if (-not $Entry -or -not $Entry.pid) { return $false }
+    $process = Get-Process -Id ([int]$Entry.pid) -ErrorAction SilentlyContinue
+    if (-not $process) { return $false }
+    if ($Entry.startTicks) {
+        $actualTicks = Get-ProcessStartTicks -ProcessId ([int]$Entry.pid)
+        if ($actualTicks -and $actualTicks -ne ([string]$Entry.startTicks)) { return $false }
+    }
+    return $true
 }
 
 function Get-ProcessTree {
@@ -356,15 +535,18 @@ function Resolve-Maven {
 
 function Build-BackendJar {
     $mvn = Resolve-Maven
-    Write-Step '后端 Jar 缺失或要求重建，执行 mvn clean package -DskipTests'
+    Write-Step '执行 mvn clean package -DskipTests（输出较多，请稍候）'
     Push-Location $BackendDir
     try {
-        & $mvn 'clean' 'package' '-DskipTests' '-q'
-        if ($LASTEXITCODE -ne 0) { throw '后端构建失败，请单独执行 mvn clean package -DskipTests 查看完整报错' }
+        $buildExitCode = Invoke-NativeCommand -FilePath $mvn -ArgumentList @('clean', 'package', '-DskipTests', '-q')
+        if ($buildExitCode -ne 0) { throw '后端构建失败，请单独执行 mvn clean package -DskipTests 查看完整报错' }
     } finally {
         Pop-Location
     }
-    Write-Ok '后端 Jar 构建完成'
+    if (-not (Test-Path -LiteralPath $JarPath)) { throw ('后端构建结束但没有生成 Jar：' + $JarPath) }
+    $jarInfo = Get-Item -LiteralPath $JarPath
+    Write-Ok ('后端 Jar 已重新生成（' + $jarInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') +
+        '，' + [math]::Round($jarInfo.Length / 1MB, 1) + ' MB）')
 }
 
 function Start-Backend {
@@ -372,19 +554,53 @@ function Start-Backend {
 
     Write-Title '2/3 后端（Spring Boot）'
 
-    if (Test-PortListening -Port $BackendPort) {
-        Write-Warn ('端口 ' + $BackendPort + ' 已被 PID ' + (Get-PortOwner -Port $BackendPort) + ' 占用，跳过启动')
-        return $null
+    $portListening = Test-PortListening -Port $BackendPort
+    $backendUp = $false
+
+    if ($portListening) {
+        # 端口被别的东西占着（例如另一个项目的后端也在 8080），先给结论，免得白跑一次编译
+        if (-not (Test-BackendPortOwnerIsOurs)) {
+            throw ('端口 ' + $BackendPort + ' 已被 ' + (Get-PortOwnerText -Port $BackendPort) +
+                ' 占用，且该进程命令行里没有 fsts，不是本项目的后端。请先停止它再重试。')
+        }
+        $backendUp = Test-BackendUp
+        if (-not $backendUp) {
+            throw ('端口 ' + $BackendPort + ' 已被本项目的后端进程占用（' + (Get-PortOwnerText -Port $BackendPort) +
+                '），但 /actuator/health 还不是 UP。请稍后重试，或先停止它。')
+        }
     }
 
-    if ($RebuildBackend -or -not (Test-Path -LiteralPath $JarPath)) {
-        Build-BackendJar
+    $rebuildReason = $null
+    if ($RebuildBackend) {
+        $rebuildReason = '已指定 -RebuildBackend'
+    } elseif (-not (Test-Path -LiteralPath $JarPath)) {
+        $rebuildReason = '后端 Jar 不存在'
     } else {
-        $newestSource = Get-ChildItem -LiteralPath (Join-Path $BackendDir 'src') -Recurse -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($newestSource -and (Get-Item -LiteralPath $JarPath).LastWriteTime -lt $newestSource.LastWriteTime) {
-            Write-Warn '后端源码比现有 Jar 新，本次仍使用旧 Jar；需要生效请加 -RebuildBackend'
+        $sourceTime = Get-LatestBackendSourceTime
+        if ($sourceTime -gt (Get-Item -LiteralPath $JarPath).LastWriteTime) {
+            $rebuildReason = '后端源码比现有 Jar 新'
         }
+    }
+
+    if ($rebuildReason) {
+        Write-Warn ($rebuildReason + '，本次自动重新编译 Jar')
+        if ($portListening) { Stop-FstsBackendForRebuild }
+        $jarHolders = @(Get-JarHolderProcessIds -JarPath $JarPath)
+        if ($jarHolders.Count -gt 0) {
+            throw ('Jar 仍被进程 ' + ($jarHolders -join ', ') +
+                ' 占用（Windows 会锁住运行中的 Jar，重打包会失败）。请先停止这些进程再重试。')
+        }
+        Build-BackendJar
+        $backendUp = $false
+    } else {
+        Write-Ok '后端 Jar 已是最新，跳过重新编译'
+    }
+
+    if ($backendUp) {
+        # 端口上是本项目的健康后端：复用即可，但不纳入本脚本管理（down 不会去杀它）
+        Write-Ok ('复用已运行的后端实例：http://localhost:' + $BackendPort + '/actuator/health 返回 UP（PID ' +
+            (Get-PortOwner -Port $BackendPort) + '）')
+        return $null
     }
 
     $java = (Get-Command java -ErrorAction Stop).Source
@@ -399,15 +615,24 @@ function Start-Backend {
     Write-Step ('后端进程已拉起 PID ' + $proc.Id + '，等待健康检查通过（最多 ' + $TimeoutSeconds + ' 秒）')
 
     $healthUrl = 'http://localhost:' + $BackendPort + '/actuator/health'
-    if (-not (Wait-HttpOk -Url $healthUrl -Seconds $TimeoutSeconds)) {
-        Write-Err '后端健康检查未通过，错误日志末尾：'
+    if (-not (Wait-BackendUp -Seconds $TimeoutSeconds)) {
+        if ($proc.HasExited) {
+            Write-Err ('后端进程已退出（退出码 ' + $proc.ExitCode + '），日志末尾：')
+        } else {
+            Write-Err '后端健康检查未通过，错误日志末尾：'
+        }
         foreach ($line in (Get-TailLines -Path $errLog -Count 15)) { Write-Host ('     ' + $line) -ForegroundColor DarkRed }
         foreach ($line in (Get-TailLines -Path $outLog -Count 15)) { Write-Host ('     ' + $line) -ForegroundColor DarkRed }
         throw ('后端启动失败，完整日志：' + $outLog + ' / ' + $errLog)
     }
 
     Write-Ok ('后端就绪：' + $healthUrl + ' 返回 UP')
-    return [pscustomobject]@{ pid = $proc.Id; port = $BackendPort; log = $outLog; errLog = $errLog }
+    return [pscustomobject]@{
+        pid    = $proc.Id
+        port   = $BackendPort
+        log    = $outLog
+        errLog = $errLog
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -417,7 +642,8 @@ function Start-Frontend {
     Write-Title '3/3 前端（Vite + Vue 3）'
 
     if (Test-PortListening -Port $FrontendPort) {
-        Write-Warn ('端口 ' + $FrontendPort + ' 已被 PID ' + (Get-PortOwner -Port $FrontendPort) + ' 占用，跳过启动')
+        Write-Warn ('端口 ' + $FrontendPort + ' 已被 ' + (Get-PortOwnerText -Port $FrontendPort) +
+            ' 占用，跳过启动（该进程不纳入本脚本管理）')
         return $null
     }
 
@@ -429,8 +655,8 @@ function Start-Frontend {
         Write-Step 'node_modules 缺失，执行 npm install（首次约需 1 分钟）'
         Push-Location $FrontendDir
         try {
-            & $npm.Source 'install' '--no-audit' '--no-fund'
-            if ($LASTEXITCODE -ne 0) { throw 'npm install 失败' }
+            $npmExitCode = Invoke-NativeCommand -FilePath $npm.Source -ArgumentList @('install', '--no-audit', '--no-fund')
+            if ($npmExitCode -ne 0) { throw ('npm install 失败（退出码 ' + $npmExitCode + '）') }
         } finally {
             Pop-Location
         }
@@ -454,7 +680,12 @@ function Start-Frontend {
     }
 
     Write-Ok ('前端就绪：' + $url)
-    return [pscustomobject]@{ pid = $proc.Id; port = $FrontendPort; log = $outLog; errLog = $errLog }
+    return [pscustomobject]@{
+        pid    = $proc.Id
+        port   = $FrontendPort
+        log    = $outLog
+        errLog = $errLog
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -477,7 +708,11 @@ function Show-Summary {
     Write-Host ('    企业端登录   http://localhost:' + $FrontendPort + '/enterprise/login   sh_yonghai / 123456 等') -ForegroundColor Gray
     Write-Host ('    消费者溯源   http://localhost:' + $FrontendPort + '/trace/FSTS-20260915-SH-0001') -ForegroundColor Gray
     Write-Host ''
-    Write-Host '  日志：.run\logs\   停止：pwsh -File start-services.ps1 -Action down' -ForegroundColor DarkGray
+    if ($Wait) {
+        Write-Host '  日志：.run\logs\   停止：关闭本窗口（或 Ctrl+C）会自动停止后端与前端' -ForegroundColor DarkGray
+    } else {
+        Write-Host '  日志：.run\logs\   停止：pwsh -File start-services.ps1 -Action down' -ForegroundColor DarkGray
+    }
 }
 
 function Show-Status {
@@ -505,19 +740,25 @@ function Show-Status {
     # 后端
     $backendListening = Test-PortListening -Port $BackendPort
     $healthText = '未启动'
+    $ownerText = ''
     if ($backendListening) {
-        try {
-            # /actuator/health 的 Content-Type 是 vnd.spring-boot.actuator.v3+json，
-            # Invoke-WebRequest 会把 Content 还原成字节数组，这里用 Invoke-RestMethod 直接拿对象
-            $health = Invoke-RestMethod -Uri ('http://localhost:' + $BackendPort + '/actuator/health') -TimeoutSec 5
-            $healthText = $health.status
-        } catch {
-            $statusCode = $null
-            if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
-            if ($statusCode) { $healthText = 'HTTP ' + $statusCode + '（服务在跑，但依赖未就绪）' } else { $healthText = '无法连接' }
+        $ownerText = Get-PortOwnerText -Port $BackendPort
+        $healthText = Get-BackendHealthStatus
+        if (-not $healthText) {
+            # 有响应但不是本项目的 actuator health（例如另一个项目也占着 8080）
+            try {
+                $resp = Invoke-WebRequest -UseBasicParsing -Uri ('http://localhost:' + $BackendPort + '/actuator/health') -TimeoutSec 5
+                $healthText = 'HTTP ' + $resp.StatusCode + '，但不是本项目后端'
+            } catch {
+                $statusCode = $null
+                if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+                if ($statusCode) { $healthText = 'HTTP ' + $statusCode + '（服务在跑，但依赖未就绪）' } else { $healthText = '无法连接' }
+            }
         }
     }
-    Write-Host ('  后端      端口' + $BackendPort + '=' + $backendListening + '  健康=' + $healthText) -ForegroundColor White
+    $backendLine = '  后端      端口' + $BackendPort + '=' + $backendListening + '  健康=' + $healthText
+    if ($ownerText) { $backendLine += '  占用者=' + $ownerText }
+    Write-Host $backendLine -ForegroundColor White
 
     # 前端
     $frontendListening = Test-PortListening -Port $FrontendPort
@@ -540,14 +781,14 @@ function Stop-Services {
     Write-Title '停止服务'
 
     $state = Read-RunState
-    $rootIds = @()
-    if ($state) {
-        if ($state.backend -and $state.backend.pid) { $rootIds += [int]$state.backend.pid }
-        if ($state.frontend -and $state.frontend.pid) { $rootIds += [int]$state.frontend.pid }
-    }
+    $rootIds = @(Get-ManagedRootIds -State $state)
 
     if ($rootIds.Count -eq 0) {
-        Write-Warn '没有本脚本记录的进程（.run\state.json 不存在）；为避免误杀手工启动的服务，这里不做端口清理'
+        if ($state) {
+            Write-Warn '记录的进程都已退出（或被 PID 复用检查跳过）；为避免误杀手工启动的服务，这里不做端口清理'
+        } else {
+            Write-Warn '没有本脚本记录的进程（.run\state.json 不存在）；为避免误杀手工启动的服务，这里不做端口清理'
+        }
     } else {
         $stopped = Stop-ProcessTree -RootIds ($rootIds | Sort-Object -Unique)
         Write-Ok ('已停止进程 ' + (($stopped | Sort-Object -Unique) -join ', '))
@@ -555,7 +796,7 @@ function Stop-Services {
 
     foreach ($port in @($BackendPort, $FrontendPort)) {
         if (Test-PortListening -Port $port) {
-            Write-Warn ('端口 ' + $port + ' 仍被 PID ' + (Get-PortOwner -Port $port) + ' 占用，可能是手工启动的进程，请自行确认后停止')
+            Write-Warn ('端口 ' + $port + ' 仍被 ' + (Get-PortOwnerText -Port $port) + ' 占用，可能是手工启动的进程，请自行确认后停止')
         }
     }
 
@@ -574,6 +815,100 @@ function Stop-Services {
     }
 
     if (Test-Path -LiteralPath $StateFile) { Remove-Item -LiteralPath $StateFile -Force }
+}
+
+# ---------------------------------------------------------------------------
+# 值守模式（关闭窗口即停止服务）
+# ---------------------------------------------------------------------------
+function Get-ManagedRootIds {
+    param($State)
+
+    # state.json 里的 PID 可能已经被其它进程复用（本机同时跑多个项目时很常见），
+    # 所以只回收"启动时间也对得上"的进程，宁可漏杀也不误杀。
+    $rootIds = New-Object 'System.Collections.Generic.List[int]'
+    if (-not $State) { return $rootIds }
+
+    foreach ($entry in @($State.backend, $State.frontend)) {
+        if (-not $entry -or -not $entry.pid) { continue }
+        $procId = [int]$entry.pid
+        $process = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if (-not $process) { continue }
+
+        if ($entry.startTicks) {
+            $actualTicks = Get-ProcessStartTicks -ProcessId $procId
+            if ($actualTicks -and $actualTicks -ne ([string]$entry.startTicks)) {
+                Write-Warn ('记录的 PID ' + $procId + ' 已被其它进程复用，本次跳过（不误杀）')
+                continue
+            }
+        }
+        $rootIds.Add($procId)
+    }
+    return $rootIds
+}
+
+function Start-ServiceWatchdog {
+    param([int]$ParentProcessId)
+
+    # 服务都在各自隐藏的控制台里，主窗口被直接关掉时 PowerShell 来不及清理，
+    # 所以另开一个隐藏进程盯着主进程，它消失后执行同一套 -Action down 逻辑。
+    # 看门狗窗口是隐藏的，把它的输出落到日志里，出问题时能查。
+    $hostPath = (Get-Process -Id $PID).Path
+    $arguments = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
+        '-Action', 'watchdog', '-ParentPid', "$ParentProcessId"
+    )
+    $watchdogOutLog = New-LogPath 'watchdog-out'
+    $watchdogErrLog = New-LogPath 'watchdog-err'
+    return Start-Process -FilePath $hostPath -ArgumentList $arguments -WindowStyle Hidden `
+        -RedirectStandardOutput $watchdogOutLog -RedirectStandardError $watchdogErrLog -PassThru
+}
+
+function Wait-ParentExit {
+    param([int]$ParentProcessId)
+
+    $parent = Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+    if (-not $parent) { return }
+    $parentStartTime = $null
+    try { $parentStartTime = $parent.StartTime } catch { $parentStartTime = $null }
+
+    while ($true) {
+        Start-Sleep -Seconds 2
+        $current = Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+        if (-not $current) { return }
+        if ($parentStartTime) {
+            # PID 会被复用，用启动时间确认还是同一个进程
+            $currentStartTime = $null
+            try { $currentStartTime = $current.StartTime } catch { $currentStartTime = $null }
+            if ($currentStartTime -and $currentStartTime -ne $parentStartTime) { return }
+        }
+    }
+}
+
+function Open-FrontendPage {
+    $url = 'http://localhost:' + $FrontendPort + '/'
+    Write-Host ('  正在打开浏览器：' + $url) -ForegroundColor Gray
+    Start-Process $url
+}
+
+function Wait-UntilWindowClosed {
+    Write-Host ''
+    Write-Host '  值守模式：本窗口就是这次服务的生命周期' -ForegroundColor Yellow
+    Write-Host '    关闭本窗口（或按 Ctrl+C）会自动停止本次启动的后端与前端' -ForegroundColor DarkGray
+    Write-Host '    MySQL 属于系统服务，默认保持运行（需要停止用 -Action down -StopDatabase）' -ForegroundColor DarkGray
+
+    $watchdog = $null
+    try {
+        $watchdog = Start-ServiceWatchdog -ParentProcessId $PID
+    } catch {
+        Write-Warn ('看门狗进程启动失败，直接关闭窗口时可能来不及停止服务：' + $_.Exception.Message)
+    }
+
+    try {
+        while ($true) { Start-Sleep -Seconds 2 }
+    } finally {
+        if ($watchdog) { Stop-Process -Id $watchdog.Id -Force -ErrorAction SilentlyContinue }
+        Stop-Services
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -615,6 +950,12 @@ function Invoke-Up {
 
     Save-RunState -State $state
     Show-Summary -Backend $state.backend -Frontend $state.frontend -Password $password
+
+    if ($Wait) {
+        # 先把浏览器开出来再值守，否则要等窗口关掉才会打开
+        if ($OpenBrowser) { Open-FrontendPage }
+        Wait-UntilWindowClosed
+    }
 }
 
 function Assert-Prerequisites {
@@ -627,11 +968,8 @@ function Assert-Prerequisites {
 
 function Complete-Run {
     param([int]$ExitCode)
-    if ($OpenBrowser -and $ExitCode -eq 0) {
-        $url = 'http://localhost:' + $FrontendPort + '/'
-        Write-Host ('  正在打开浏览器：' + $url) -ForegroundColor Gray
-        Start-Process $url
-    }
+    # 值守模式下浏览器已经在进入等待前打开过了，这里不再重复
+    if ($OpenBrowser -and -not $Wait -and $ExitCode -eq 0) { Open-FrontendPage }
     if ($PauseAtEnd) {
         Write-Host ''
         # 没有控制台（例如被 CI 或重定向调用）时 Read-Host 会抛错，这里降级为短暂停顿
@@ -650,6 +988,11 @@ try {
             Stop-Services
             Start-Sleep -Seconds 2
             Invoke-Up
+        }
+        'watchdog' {
+            if (-not $ParentPid) { throw 'watchdog 动作需要 -ParentPid（由 -Wait 值守模式自动传递）。' }
+            Wait-ParentExit -ParentProcessId $ParentPid
+            Stop-Services
         }
     }
     Complete-Run -ExitCode 0

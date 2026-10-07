@@ -64,7 +64,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
      *
      * <p>开发期前端通过 vue.config.js 的 devServer.proxy 同源转发，本不需要 CORS；
      * 这里放开是为了支持"前端独立域名部署"的场景。
-     * 生产环境请把 allowedOriginPatterns 收窄为实际域名，并关闭 allowCredentials。
+     *
+     * <p><b>allowCredentials 必须为 false</b>：本系统的凭据是 {@code Authorization}
+     * 请求头里的 JWT，而不是 Cookie，因此完全不需要携带凭据。
+     * 反过来，一旦开启 allowCredentials，浏览器就允许跨站请求带上 Cookie，
+     * 配合通配的来源模式等于把所有接口暴露给任意站点（CSRF 风险）。
+     *
+     * <p>生产环境请把 allowedOriginPatterns 收窄为实际前端域名。
      */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
@@ -73,7 +79,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .exposedHeaders("X-Trace-Id")
-                .allowCredentials(true)
+                .allowCredentials(false)
                 .maxAge(3600);
     }
 }

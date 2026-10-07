@@ -13,11 +13,13 @@ rem  mojibake on machines whose code page is not GBK (and can even break
 rem  parsing). Keeping the launcher ASCII-only makes it work on any locale.
 rem
 rem  Usage:
-rem    start-services.bat                                    double-click:
-rem                                                          db + backend +
-rem                                                          frontend, then
-rem                                                          open browser and
-rem                                                          wait for a key
+rem    start-services.bat                                    double-click: db +
+rem                                                          backend + frontend,
+rem                                                          open browser, then
+rem                                                          keep this window
+rem                                                          open; closing it
+rem                                                          stops backend and
+rem                                                          frontend
 rem    start-services.bat status                             show status
 rem    start-services.bat down                               stop backend+frontend
 rem    start-services.bat down -StopDatabase                  also stop MySQL
@@ -25,8 +27,9 @@ rem    start-services.bat restart                            restart
 rem    start-services.bat up -InitDatabase -RebuildBackend    rebuild db + jar
 rem
 rem  Every argument is forwarded to start-services.ps1 unchanged. Arguments are
-rem  only defaulted when none are given, and the "pause at the end" behaviour is
-rem  requested in that case only, so terminal usage stays script friendly.
+rem  only defaulted when none are given: double-clicking runs "up -Wait
+rem  -OpenBrowser" (foreground watchdog mode), so terminal and scripted usage
+rem  stays script friendly.
 rem ===========================================================================
 
 setlocal EnableExtensions
@@ -51,7 +54,7 @@ if not defined PSEXE (
 )
 
 set "ARGS=%*"
-if "%ARGS%"=="" set "ARGS=up -OpenBrowser -PauseAtEnd"
+if "%ARGS%"=="" set "ARGS=up -Wait -OpenBrowser"
 
 "%PSEXE%" -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %ARGS%
 exit /b %ERRORLEVEL%

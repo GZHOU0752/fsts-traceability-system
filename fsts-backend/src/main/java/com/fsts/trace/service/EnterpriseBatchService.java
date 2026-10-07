@@ -229,32 +229,12 @@ public class EnterpriseBatchService {
         batchMapper.insert(batch);
         insertDetail(batch.getId(), type, request);
 
-        String confirmRequestNo = null;
-        if (type == Constants.ENTERPRISE_TYPE_FISHING && Boolean.TRUE.equals(request.getPublish())) {
-            int affected = batchMapper.publishIfNew(batch.getId(), user.getEnterpriseId(), LocalDateTime.now());
-            if (affected > 0) {
-                batch.setBatchStatus(Constants.BATCH_STATUS_CONFIRMED);
-                batch.setPublishTime(LocalDateTime.now());
-            }
-        } else if (type != Constants.ENTERPRISE_TYPE_FISHING && Boolean.TRUE.equals(request.getSendConfirmRequest())) {
-            confirmRequestNo = submitConfirmRequest(user, batch, coldChain.handoverTemp());
-            batch.setBatchStatus(Constants.BATCH_STATUS_PENDING);
-        }
+        String confirmRequestNo = advanceStatusAfterSave(user, batch, type, request, coldChain.handoverTemp());
 
         log.info("新建产品批号成功: enterpriseId={} batchNo={} status={}",
                 user.getEnterpriseId(), batch.getBatchNo(), batch.getBatchStatus());
 
-        return BatchSaveResultVO.builder()
-                .id(batch.getId())
-                .batchNo(batch.getBatchNo())
-                .batchStatus(batch.getBatchStatus())
-                .batchStatusName(dictService.batchStatusName(batch.getBatchStatus()))
-                .handoverTemp(batch.getHandoverTemp())
-                .coldChainOk(batch.getColdChainOk() == 1)
-                .confirmRequestNo(confirmRequestNo)
-                .traceCode(batch.getBatchStatus() == Constants.BATCH_STATUS_CONFIRMED
-                        ? loadTraceCodeInfo(batch.getId()) : null)
-                .build();
+        return buildSaveResult(batch, confirmRequestNo);
     }
 
     // ==================================================================
@@ -289,29 +269,9 @@ public class EnterpriseBatchService {
 
         updateDetail(batch.getId(), type, request);
 
-        String confirmRequestNo = null;
-        if (type == Constants.ENTERPRISE_TYPE_FISHING && Boolean.TRUE.equals(request.getPublish())) {
-            int affected = batchMapper.publishIfNew(batch.getId(), user.getEnterpriseId(), LocalDateTime.now());
-            if (affected > 0) {
-                batch.setBatchStatus(Constants.BATCH_STATUS_CONFIRMED);
-                batch.setPublishTime(LocalDateTime.now());
-            }
-        } else if (type != Constants.ENTERPRISE_TYPE_FISHING && Boolean.TRUE.equals(request.getSendConfirmRequest())) {
-            confirmRequestNo = submitConfirmRequest(user, batch, coldChain.handoverTemp());
-            batch.setBatchStatus(Constants.BATCH_STATUS_PENDING);
-        }
+        String confirmRequestNo = advanceStatusAfterSave(user, batch, type, request, coldChain.handoverTemp());
 
-        return BatchSaveResultVO.builder()
-                .id(batch.getId())
-                .batchNo(batch.getBatchNo())
-                .batchStatus(batch.getBatchStatus())
-                .batchStatusName(dictService.batchStatusName(batch.getBatchStatus()))
-                .handoverTemp(batch.getHandoverTemp())
-                .coldChainOk(batch.getColdChainOk() == 1)
-                .confirmRequestNo(confirmRequestNo)
-                .traceCode(batch.getBatchStatus() == Constants.BATCH_STATUS_CONFIRMED
-                        ? loadTraceCodeInfo(batch.getId()) : null)
-                .build();
+        return buildSaveResult(batch, confirmRequestNo);
     }
 
     // ==================================================================
@@ -503,47 +463,73 @@ public class EnterpriseBatchService {
         batch.setSourceType(upstream.getSourceType());
     }
 
+    /**
+     * 保存后的状态推进：捕捞与养殖企业可直接发布；其余企业按需发起上游确认请求。
+     *
+     * @return 本次发起的确认请求单号，未发起时为 null
+     */
+    private String advanceStatusAfterSave(LoginUser user, ProductBatch batch, Integer type,
+                                          BatchSaveRequest request, java.math.BigDecimal handoverTemp) {
+        boolean sourceStage = type != null && type == Constants.ENTERPRISE_TYPE_FISHING;
+        if (sourceStage && Boolean.TRUE.equals(request.getPublish())) {
+            // 同一个时间戳同时用于条件更新与回填，避免两处 now() 不一致
+            LocalDateTime now = LocalDateTime.now();
+            if (batchMapper.publishIfNew(batch.getId(), user.getEnterpriseId(), now) > 0) {
+                batch.setBatchStatus(Constants.BATCH_STATUS_CONFIRMED);
+                batch.setPublishTime(now);
+            }
+            return null;
+        }
+        if (!sourceStage && Boolean.TRUE.equals(request.getSendConfirmRequest())) {
+            String confirmRequestNo = submitConfirmRequest(user, batch, handoverTemp);
+            batch.setBatchStatus(Constants.BATCH_STATUS_PENDING);
+            return confirmRequestNo;
+        }
+        return null;
+    }
+
+    /**
+     * 新建与更新共用同一份结果装配，避免两条路径的返回结构漂移。
+     */
+    private BatchSaveResultVO buildSaveResult(ProductBatch batch, String confirmRequestNo) {
+        boolean confirmed = batch.getBatchStatus() != null
+                && batch.getBatchStatus() == Constants.BATCH_STATUS_CONFIRMED;
+        return BatchSaveResultVO.builder()
+                .id(batch.getId())
+                .batchNo(batch.getBatchNo())
+                .batchStatus(batch.getBatchStatus())
+                .batchStatusName(dictService.batchStatusName(batch.getBatchStatus()))
+                .handoverTemp(batch.getHandoverTemp())
+                .coldChainOk(batch.getColdChainOk() != null && batch.getColdChainOk() == 1)
+                .confirmRequestNo(confirmRequestNo)
+                .traceCode(confirmed ? loadTraceCodeInfo(batch.getId()) : null)
+                .build();
+    }
+
     private void insertDetail(Long batchId, Integer type, BatchSaveRequest request) {
         switch (type) {
             case Constants.ENTERPRISE_TYPE_FISHING -> {
                 BatchFishing entity = new BatchFishing();
                 entity.setBatchId(batchId);
-                entity.setCatchBreedDate(request.getCatchBreedDate());
-                entity.setCertificateType(request.getCertificateType());
-                entity.setCertificateNo(request.getCertificateNo());
-                entity.setDepartureTemp(request.getDepartureTemp());
-                entity.setDrugReportNo(request.getDrugReportNo());
-                entity.setFishingLogNo(request.getFishingLogNo());
+                applyFishingDetail(entity, request);
                 fishingMapper.insert(entity);
             }
             case Constants.ENTERPRISE_TYPE_PROCESSING -> {
                 BatchProcessing entity = new BatchProcessing();
                 entity.setBatchId(batchId);
-                entity.setProcessForm(request.getProcessForm());
-                entity.setInspectionNo(request.getInspectionNo());
-                entity.setQuickFreezeTemp(request.getQuickFreezeTemp());
-                entity.setFactoryTemp(request.getFactoryTemp());
-                entity.setProductionBatchNo(request.getProductionBatchNo());
+                applyProcessingDetail(entity, request);
                 processingMapper.insert(entity);
             }
             case Constants.ENTERPRISE_TYPE_WHOLESALE -> {
                 BatchWholesale entity = new BatchWholesale();
                 entity.setBatchId(batchId);
-                entity.setWholesaleDate(request.getWholesaleDate());
-                entity.setInboundTemp(request.getInboundTemp());
-                entity.setColdStorageTemp(request.getColdStorageTemp());
-                entity.setOutboundTemp(request.getOutboundTemp());
-                entity.setTransportToolNo(request.getTransportToolNo());
-                entity.setColdStorageNo(request.getColdStorageNo());
+                applyWholesaleDetail(entity, request);
                 wholesaleMapper.insert(entity);
             }
             case Constants.ENTERPRISE_TYPE_RETAIL -> {
                 BatchRetail entity = new BatchRetail();
                 entity.setBatchId(batchId);
-                entity.setShelfDate(request.getShelfDate());
-                entity.setDisplayTemp(request.getDisplayTemp());
-                entity.setSaleStore(request.getSaleStore());
-                entity.setDisplayEquipNo(request.getDisplayEquipNo());
+                applyRetailDetail(entity, request);
                 retailMapper.insert(entity);
             }
             default -> throw BusinessException.of(ErrorCode.PARAM_INVALID, "不支持的企业类型：" + type);
@@ -559,12 +545,7 @@ public class EnterpriseBatchService {
                     insertDetail(batchId, type, request);
                     return;
                 }
-                entity.setCatchBreedDate(request.getCatchBreedDate());
-                entity.setCertificateType(request.getCertificateType());
-                entity.setCertificateNo(request.getCertificateNo());
-                entity.setDepartureTemp(request.getDepartureTemp());
-                entity.setDrugReportNo(request.getDrugReportNo());
-                entity.setFishingLogNo(request.getFishingLogNo());
+                applyFishingDetail(entity, request);
                 fishingMapper.updateById(entity);
             }
             case Constants.ENTERPRISE_TYPE_PROCESSING -> {
@@ -574,11 +555,7 @@ public class EnterpriseBatchService {
                     insertDetail(batchId, type, request);
                     return;
                 }
-                entity.setProcessForm(request.getProcessForm());
-                entity.setInspectionNo(request.getInspectionNo());
-                entity.setQuickFreezeTemp(request.getQuickFreezeTemp());
-                entity.setFactoryTemp(request.getFactoryTemp());
-                entity.setProductionBatchNo(request.getProductionBatchNo());
+                applyProcessingDetail(entity, request);
                 processingMapper.updateById(entity);
             }
             case Constants.ENTERPRISE_TYPE_WHOLESALE -> {
@@ -588,12 +565,7 @@ public class EnterpriseBatchService {
                     insertDetail(batchId, type, request);
                     return;
                 }
-                entity.setWholesaleDate(request.getWholesaleDate());
-                entity.setInboundTemp(request.getInboundTemp());
-                entity.setColdStorageTemp(request.getColdStorageTemp());
-                entity.setOutboundTemp(request.getOutboundTemp());
-                entity.setTransportToolNo(request.getTransportToolNo());
-                entity.setColdStorageNo(request.getColdStorageNo());
+                applyWholesaleDetail(entity, request);
                 wholesaleMapper.updateById(entity);
             }
             case Constants.ENTERPRISE_TYPE_RETAIL -> {
@@ -603,14 +575,50 @@ public class EnterpriseBatchService {
                     insertDetail(batchId, type, request);
                     return;
                 }
-                entity.setShelfDate(request.getShelfDate());
-                entity.setDisplayTemp(request.getDisplayTemp());
-                entity.setSaleStore(request.getSaleStore());
-                entity.setDisplayEquipNo(request.getDisplayEquipNo());
+                applyRetailDetail(entity, request);
                 retailMapper.updateById(entity);
             }
             default -> throw BusinessException.of(ErrorCode.PARAM_INVALID, "不支持的企业类型：" + type);
         }
+    }
+
+    /*
+     * 下面四个方法只负责"请求体 -> 明细实体"的字段映射。
+     * 新增与更新都走同一份映射，避免日后加字段时只改了一处，
+     * 出现"新建有值、编辑后丢失"这类只在特定路径复现的缺陷。
+     */
+
+    private void applyFishingDetail(BatchFishing entity, BatchSaveRequest request) {
+        entity.setCatchBreedDate(request.getCatchBreedDate());
+        entity.setCertificateType(request.getCertificateType());
+        entity.setCertificateNo(request.getCertificateNo());
+        entity.setDepartureTemp(request.getDepartureTemp());
+        entity.setDrugReportNo(request.getDrugReportNo());
+        entity.setFishingLogNo(request.getFishingLogNo());
+    }
+
+    private void applyProcessingDetail(BatchProcessing entity, BatchSaveRequest request) {
+        entity.setProcessForm(request.getProcessForm());
+        entity.setInspectionNo(request.getInspectionNo());
+        entity.setQuickFreezeTemp(request.getQuickFreezeTemp());
+        entity.setFactoryTemp(request.getFactoryTemp());
+        entity.setProductionBatchNo(request.getProductionBatchNo());
+    }
+
+    private void applyWholesaleDetail(BatchWholesale entity, BatchSaveRequest request) {
+        entity.setWholesaleDate(request.getWholesaleDate());
+        entity.setInboundTemp(request.getInboundTemp());
+        entity.setColdStorageTemp(request.getColdStorageTemp());
+        entity.setOutboundTemp(request.getOutboundTemp());
+        entity.setTransportToolNo(request.getTransportToolNo());
+        entity.setColdStorageNo(request.getColdStorageNo());
+    }
+
+    private void applyRetailDetail(BatchRetail entity, BatchSaveRequest request) {
+        entity.setShelfDate(request.getShelfDate());
+        entity.setDisplayTemp(request.getDisplayTemp());
+        entity.setSaleStore(request.getSaleStore());
+        entity.setDisplayEquipNo(request.getDisplayEquipNo());
     }
 
     BatchFishingInfoVO loadFishingInfo(Long batchId) {

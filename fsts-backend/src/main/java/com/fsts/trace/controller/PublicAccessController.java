@@ -9,8 +9,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.List;
 
 /**
@@ -36,29 +34,11 @@ public class PublicAccessController {
     @GetMapping("/access-hosts")
     public Result<List<String>> accessHosts(HttpServletRequest request) {
         String clientIp = ClientIpUtils.resolve(request);
-        if (!isPrivateAddress(clientIp)) {
+        // 复用限流模块的"可信来源"判定：该判定已经考虑了转发头伪造，
+        // 公网请求无法通过自带 X-Forwarded-For: 192.168.x.x 套取内网拓扑
+        if (!ClientIpUtils.isTrustedPeer(clientIp)) {
             return Result.ok("非内网调用，不返回局域网地址", List.of());
         }
         return Result.ok("查询成功", LanAddressResolver.resolve());
-    }
-
-    private static boolean isPrivateAddress(String ip) {
-        if (ip == null || ip.isBlank()) {
-            return false;
-        }
-        try {
-            InetAddress address = InetAddress.getByName(ip);
-            return address.isLoopbackAddress() || address.isAnyLocalAddress()
-                    || address.isSiteLocalAddress() || address.isLinkLocalAddress()
-                    || isUniqueLocalIpv6(address);
-        } catch (UnknownHostException e) {
-            return false;
-        }
-    }
-
-    /** IPv6 唯一本地地址（fc00::/7） */
-    private static boolean isUniqueLocalIpv6(InetAddress address) {
-        byte[] bytes = address.getAddress();
-        return bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
     }
 }

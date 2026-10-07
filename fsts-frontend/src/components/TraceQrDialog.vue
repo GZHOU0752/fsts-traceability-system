@@ -5,6 +5,7 @@ import { CopyDocument, Download, Link, Printer } from '@element-plus/icons-vue'
 import StatusTag from '@/components/StatusTag.vue'
 import TraceQrCode from '@/components/TraceQrCode.vue'
 import { printTraceLabel } from '@/lib/traceLabel'
+import { writeClipboard } from '@/lib/clipboard'
 import { useTraceLinkBase } from '@/composables/useTraceLinkBase'
 import type { TraceCodeInfo } from '@/types/domain'
 
@@ -32,8 +33,12 @@ async function copy(value?: string, tip = '已复制') {
   if (!value) {
     return
   }
-  await navigator.clipboard?.writeText(value)
-  ElMessage.success(tip)
+  // 局域网 http 属于非安全上下文，此时 Clipboard API 不可用，需要回退到 execCommand
+  if (await writeClipboard(value)) {
+    ElMessage.success(tip)
+  } else {
+    ElMessage.warning('当前浏览器禁止自动复制，请手动选中后复制')
+  }
 }
 
 function download() {

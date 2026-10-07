@@ -23,9 +23,15 @@ public interface TraceCodeMapper extends BaseMapper<TraceCode> {
 
     /**
      * 消费者端产品搜索：按产品名称模糊匹配仍有效的溯源标识码。
+     *
+     * <p>只取列表展示需要的列，避免回表后再丢弃宽字段（如 qr_content）。
+     * 配合 idx_trace_status_time(status, generate_time) 可走索引顺序扫描 + LIMIT 提前终止，
+     * 省掉"全表扫描 + 文件排序"。
      */
     @Select("""
-            SELECT * FROM trace_code
+            SELECT id, trace_code, batch_id, batch_no, retailer_id, retailer_name,
+                   product_variety, sale_store, generate_time
+              FROM trace_code
              WHERE status = 1 AND product_variety LIKE CONCAT('%', #{keyword}, '%')
              ORDER BY generate_time DESC
              LIMIT 50

@@ -1,1 +1,59 @@
-:root { --ink-950: #102b3f; --ink-900: #173d54; --ink-700: #416375; --ink-500: #708895; --ink-300: #b9c9ce; --mist-50: #f5f9f8; --mist-100: #edf4f2; --mist-200: #dce9e5; --paper: #fff; --teal-600: #118b82; --teal-500: #20a79a; --teal-100: #e2f5f1; --coral-500: #ed775c; --coral-100: #fff0eb; --amber-500: #d9932f; --amber-100: #fff5df; --red-500: #d4564e; --shadow-sm: 0 4px 16px rgba(20,57,70,.06); --shadow-md: 0 14px 32px rgba(20,57,70,.1); --radius-sm: 8px; --radius-md: 12px; --radius-lg: 18px; --sidebar-width: 244px; font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; color: var(--ink-950); background: var(--mist-50); font-synthesis: none; text-rendering: optimizeLegibility; }
+/* ==========================================================================
+   FSTS 设计令牌
+   --------------------------------------------------------------------------
+   颜色分三组：墨蓝（文字/深色面）、雾白（背景/分隔）、品牌色（青绿 + 珊瑚）。
+   对比度：正文与次要文字按 WCAG AA（白底 ≥4.5:1）取值，
+   因此 --ink-500 / --ink-400 / 输入框 placeholder 都不是"看起来更淡"的那种灰。
+   ========================================================================== */
+
+:root {
+  /* —— 墨蓝：从最深标题到最浅装饰线 —— */
+  --ink-950: #102b3f;
+  --ink-900: #173d54;
+  --ink-700: #416375;
+  --ink-500: #5a7280; /* 次要文字：白底 5.0:1（原 #708895 仅 3.9:1） */
+  --ink-400: #778d99; /* 图标与提示：白底 3.5:1，满足非文本元件 3:1 */
+  --ink-300: #b9c9ce; /* 仅用于分隔符等纯装饰 */
+
+  /* —— 雾白：页面底色与描边 —— */
+  --mist-50: #f5f9f8;
+  --mist-100: #edf4f2;
+  --mist-200: #dce9e5;
+  --paper: #fff;
+
+  /* —— 品牌色 —— */
+  --teal-600: #118b82;
+  --teal-500: #20a79a;
+  --teal-100: #e2f5f1;
+  --coral-500: #ed775c;
+  --coral-100: #fff0eb;
+  --amber-500: #d9932f;
+  --amber-100: #fff5df;
+  --red-500: #d4564e;
+
+  /* —— 层次：卡片用一层柔和投影，浮层才用更大的那档 —— */
+  --shadow-sm: 0 4px 16px rgba(20, 57, 70, 0.06);
+  --shadow-md: 0 14px 32px rgba(20, 57, 70, 0.1);
+  --shadow-lg: 0 24px 54px rgba(20, 57, 70, 0.16);
+
+  /* —— 形状 —— */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  /* —— 运动：统一用同一条减速曲线，避免每处各写一个 cubic-bezier —— */
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --focus-ring: 0 0 0 3px rgba(32, 167, 154, 0.35);
+
+  /* 拉丁字母与数字用 Inter，中文回落到系统字体；Element Plus 也引用同一个令牌 */
+  --font-sans: Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+
+  --sidebar-width: 244px;
+
+  font-family: var(--font-sans);
+  color: var(--ink-950);
+  background: var(--mist-50);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
