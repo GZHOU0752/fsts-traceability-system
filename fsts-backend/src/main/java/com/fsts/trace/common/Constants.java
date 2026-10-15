@@ -45,11 +45,6 @@ public final class Constants {
     /** 用户类型：节点企业 */
     public static final String USER_TYPE_ENTERPRISE = "ENTERPRISE";
 
-    /** 冷链常规阈值（℃）：不高于该值判定合格 */
-    public static final java.math.BigDecimal TEMP_THRESHOLD_NORMAL = new java.math.BigDecimal("-18.00");
-    /** 速冻中心温度阈值（℃） */
-    public static final java.math.BigDecimal TEMP_THRESHOLD_QUICK_FREEZE = new java.math.BigDecimal("-35.00");
-
     /** 企业编码前缀 */
     public static final String ENTERPRISE_CODE_PREFIX = "FSTS-E-";
     /** 确认请求单号前缀 */

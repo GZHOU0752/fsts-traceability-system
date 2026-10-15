@@ -10,11 +10,13 @@
     "typecheck": "vue-tsc --noEmit",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
+    "test:e2e": "playwright test",
     "lint": "eslint . --ext .ts,.vue"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
     "@types/qrcode": "^1.5.6",
+    "@playwright/test": "^1.56.0",
     "@vitejs/plugin-vue": "^6.0.9",
     "@vue/test-utils": "^2.5.1",
     "eslint": "^10.11.0",

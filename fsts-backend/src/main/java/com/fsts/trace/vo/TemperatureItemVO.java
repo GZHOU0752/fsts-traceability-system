@@ -2,6 +2,7 @@ package com.fsts.trace.vo;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 
@@ -10,6 +11,7 @@ import java.math.BigDecimal;
  */
 @Data
 @AllArgsConstructor
+@NoArgsConstructor
 public class TemperatureItemVO {
 
     private String name;

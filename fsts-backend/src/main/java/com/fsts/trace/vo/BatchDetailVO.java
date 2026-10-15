@@ -7,6 +7,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 产品批号详情（接口 10.2）。
@@ -86,4 +87,7 @@ public class BatchDetailVO {
     private TraceCodeInfoVO traceCode;
 
     private ConfirmRequestBriefVO confirmRequest;
+
+    /** 状态流转时间线（接口 10.11 落地后新增，按时间升序） */
+    private List<BatchStatusLogVO> statusLogs;
 }

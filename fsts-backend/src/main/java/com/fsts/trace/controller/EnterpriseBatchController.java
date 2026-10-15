@@ -7,13 +7,16 @@ import com.fsts.trace.common.annotation.Idempotent;
 import com.fsts.trace.dto.query.BatchQuery;
 import com.fsts.trace.dto.query.UpstreamBatchQuery;
 import com.fsts.trace.dto.query.UpstreamEnterpriseQuery;
+import com.fsts.trace.dto.request.BatchImportRequest;
 import com.fsts.trace.dto.request.BatchSaveRequest;
 import com.fsts.trace.dto.request.BatchUpdateRequest;
 import com.fsts.trace.dto.request.OffShelfRequest;
 import com.fsts.trace.service.ConfirmRequestService;
+import com.fsts.trace.service.EnterpriseBatchImportService;
 import com.fsts.trace.service.EnterpriseBatchService;
 import com.fsts.trace.service.UpstreamService;
 import com.fsts.trace.vo.BatchDetailVO;
+import com.fsts.trace.vo.BatchImportResultVO;
 import com.fsts.trace.vo.BatchListItemVO;
 import com.fsts.trace.vo.BatchPublishResultVO;
 import com.fsts.trace.vo.BatchSaveResultVO;
@@ -48,6 +51,7 @@ public class EnterpriseBatchController {
     private final UpstreamService upstreamService;
     private final EnterpriseBatchService batchService;
     private final ConfirmRequestService confirmRequestService;
+    private final EnterpriseBatchImportService batchImportService;
 
     // ---------------- 9 上游数据选择 ----------------
 
@@ -162,5 +166,32 @@ public class EnterpriseBatchController {
     @GetMapping("/batches/{id}/trace-code")
     public Result<TraceCodeInfoVO> traceCode(@CurrentUser LoginUser user, @PathVariable("id") Long id) {
         return Result.ok("查询成功", batchService.queryTraceCode(user, id));
+    }
+
+    /**
+     * 10.11 恢复上架（下架的可逆路径）。
+     *
+     * <p>下架会连带失效零售商的溯源码，因此必须提供撤销入口；
+     * 10.1 列表按需求不返回已下架批号，前端入口为"下架成功后 60 秒内的撤销条"。
+     */
+    @PutMapping("/batches/{id}/restore")
+    public Result<BatchPublishResultVO> restore(@CurrentUser LoginUser user, @PathVariable("id") Long id) {
+        return Result.ok("已恢复上架", batchService.restore(user, id));
+    }
+
+    /**
+     * 10.12 批量导入产品批号（CSV 解析在前端完成，这里接收结构化行）。
+     *
+     * <p>逐行独立事务：失败行不影响已成功的行，结果按行返回，便于用户只修正出错的行。
+     */
+    @Idempotent(ttlSeconds = 10, message = "批量导入正在处理中，请勿重复提交")
+    @PostMapping("/batches/import")
+    public Result<BatchImportResultVO> importBatches(@CurrentUser LoginUser user,
+                                                     @Valid @RequestBody BatchImportRequest request) {
+        BatchImportResultVO result = batchImportService.importBatches(user, request);
+        String message = result.getFailureCount() == 0
+                ? "导入成功 " + result.getSuccessCount() + " 条"
+                : "导入完成：成功 " + result.getSuccessCount() + " 条，失败 " + result.getFailureCount() + " 条";
+        return Result.ok(message, result);
     }
 }

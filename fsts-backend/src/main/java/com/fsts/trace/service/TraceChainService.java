@@ -3,6 +3,8 @@ package com.fsts.trace.service;
 import com.fsts.trace.common.BusinessException;
 import com.fsts.trace.common.Constants;
 import com.fsts.trace.common.ErrorCode;
+import com.fsts.trace.common.util.TraceCodeCheckDigit;
+import com.fsts.trace.config.props.TraceProperties;
 import com.fsts.trace.entity.BatchFishing;
 import com.fsts.trace.entity.BatchProcessing;
 import com.fsts.trace.entity.BatchRetail;
@@ -17,6 +19,7 @@ import com.fsts.trace.mapper.BatchWholesaleMapper;
 import com.fsts.trace.mapper.NodeEnterpriseMapper;
 import com.fsts.trace.mapper.ProductBatchMapper;
 import com.fsts.trace.service.support.ColdChainService;
+import com.fsts.trace.support.cache.CacheService;
 import com.fsts.trace.support.counter.TraceQueryCounter;
 import com.fsts.trace.vo.CertificateVO;
 import com.fsts.trace.vo.PublicTraceVO;
@@ -27,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -55,6 +59,9 @@ public class TraceChainService {
             "", "捕捞与养殖环节", "冷冻加工环节", "批发与冷链仓储环节", "零售环节"
     };
 
+    /** 溯源结果快照的缓存命名空间 */
+    private static final String CACHE_NAMESPACE = "trace";
+
     private final TraceCodeService traceCodeService;
     private final ProductBatchMapper batchMapper;
     private final BatchFishingMapper fishingMapper;
@@ -64,6 +71,8 @@ public class TraceChainService {
     private final NodeEnterpriseMapper enterpriseMapper;
     private final DictService dictService;
     private final TraceQueryCounter queryCounter;
+    private final TraceProperties traceProperties;
+    private final CacheService cacheService;
 
     public TraceChainService(TraceCodeService traceCodeService,
                              ProductBatchMapper batchMapper,
@@ -73,7 +82,9 @@ public class TraceChainService {
                              BatchRetailMapper retailMapper,
                              NodeEnterpriseMapper enterpriseMapper,
                              DictService dictService,
-                             TraceQueryCounter queryCounter) {
+                             TraceQueryCounter queryCounter,
+                             TraceProperties traceProperties,
+                             CacheService cacheService) {
         this.traceCodeService = traceCodeService;
         this.batchMapper = batchMapper;
         this.fishingMapper = fishingMapper;
@@ -83,13 +94,19 @@ public class TraceChainService {
         this.enterpriseMapper = enterpriseMapper;
         this.dictService = dictService;
         this.queryCounter = queryCounter;
+        this.traceProperties = traceProperties;
+        this.cacheService = cacheService;
     }
 
     /**
      * 按溯源标识码查询溯源信息（接口 12.1）。
+     *
+     * <p>查询次数必须每次实时自增并回填，因此"标识码 + 计数"这一段永远走数据库；
+     * 真正昂贵的"递归链 + 明细装配"结果放在 {@link #loadSnapshot} 里做短 TTL 缓存。
      */
     public PublicTraceVO query(String traceCodeValue) {
-        TraceCode traceCode = traceCodeService.getByTraceCode(traceCodeValue);
+        String normalized = TraceCodeCheckDigit.assertValid(traceCodeValue, traceProperties.isCheckDigitEnabled());
+        TraceCode traceCode = traceCodeService.getByTraceCode(normalized);
         if (traceCode == null) {
             throw BusinessException.of(ErrorCode.TRACE_CODE_NOT_FOUND);
         }
@@ -97,6 +114,50 @@ public class TraceChainService {
             throw BusinessException.of(ErrorCode.TRACE_CODE_INVALID);
         }
 
+        TraceChainSnapshot snapshot = loadSnapshot(traceCode);
+
+        // 读路径只做内存自增，真正的 UPDATE 由定时任务批量完成
+        queryCounter.record(traceCode.getId());
+
+        return PublicTraceVO.builder()
+                .traceCode(traceCode.getTraceCode())
+                .batchNo(traceCode.getBatchNo())
+                .productVariety(traceCode.getProductVariety())
+                .retailerName(snapshot.retailerName() != null
+                        ? snapshot.retailerName() : traceCode.getRetailerName())
+                .saleStore(traceCode.getSaleStore())
+                .generateTime(traceCode.getGenerateTime())
+                .queryCount((int) queryCounter.currentCount(traceCode.getId(), traceCode.getQueryCount()))
+                .coldChainQualified(snapshot.coldChainQualified())
+                .coldChainConclusion(snapshot.coldChainConclusion())
+                .temperatureCurve(snapshot.temperatureCurve())
+                .links(snapshot.links())
+                .build();
+    }
+
+    /**
+     * 取溯源链组装结果（带短 TTL 缓存）。
+     *
+     * <p>缓存只存"链路快照"（环节、温度、结论、零售商名称），不含查询次数，
+     * 因为查询次数要求实时。批号下架/恢复上架会改变标识码状态，
+     * 由 {@link TraceCodeService} 主动失效，避免出现"已下架还能查到"。
+     */
+    private TraceChainSnapshot loadSnapshot(TraceCode traceCode) {
+        int ttl = traceProperties.getResultTtlSeconds();
+        if (ttl <= 0) {
+            return buildSnapshot(traceCode);
+        }
+        TraceChainSnapshot cached = cacheService.get(CACHE_NAMESPACE, traceCode.getTraceCode(), TraceChainSnapshot.class);
+        if (cached != null) {
+            return cached;
+        }
+        TraceChainSnapshot built = buildSnapshot(traceCode);
+        cacheService.put(CACHE_NAMESPACE, traceCode.getTraceCode(), built, Duration.ofSeconds(ttl));
+        return built;
+    }
+
+    /** 递归组装溯源链（原查询逻辑），结果为可缓存的不可变快照 */
+    private TraceChainSnapshot buildSnapshot(TraceCode traceCode) {
         List<ProductBatch> chain = batchMapper.selectTraceChain(traceCode.getBatchId());
         if (chain == null || chain.isEmpty()) {
             throw BusinessException.of(ErrorCode.TRACE_CODE_NOT_FOUND);
@@ -157,8 +218,8 @@ public class TraceChainService {
                                 certificates.add(new CertificateVO("水产品药物残留检测报告", detail.getDrugReportNo()));
                             }
                             temperatures.add(new TemperatureItemVO("起运温度", detail.getDepartureTemp(),
-                                    Constants.TEMP_THRESHOLD_NORMAL,
-                                    ColdChainService.isQualified(detail.getDepartureTemp(), Constants.TEMP_THRESHOLD_NORMAL)));
+                                    traceProperties.getNormalTempThreshold(),
+                                    ColdChainService.isQualified(detail.getDepartureTemp(), traceProperties.getNormalTempThreshold())));
                         }
                     }
                     case Constants.ENTERPRISE_TYPE_PROCESSING -> {
@@ -166,11 +227,11 @@ public class TraceChainService {
                         if (detail != null) {
                             certificates.add(new CertificateVO("出厂检验报告", detail.getInspectionNo()));
                             temperatures.add(new TemperatureItemVO("速冻中心温度", detail.getQuickFreezeTemp(),
-                                    Constants.TEMP_THRESHOLD_QUICK_FREEZE,
-                                    ColdChainService.isQualified(detail.getQuickFreezeTemp(), Constants.TEMP_THRESHOLD_QUICK_FREEZE)));
+                                    traceProperties.getQuickFreezeTempThreshold(),
+                                    ColdChainService.isQualified(detail.getQuickFreezeTemp(), traceProperties.getQuickFreezeTempThreshold())));
                             temperatures.add(new TemperatureItemVO("出厂温度", detail.getFactoryTemp(),
-                                    Constants.TEMP_THRESHOLD_NORMAL,
-                                    ColdChainService.isQualified(detail.getFactoryTemp(), Constants.TEMP_THRESHOLD_NORMAL)));
+                                    traceProperties.getNormalTempThreshold(),
+                                    ColdChainService.isQualified(detail.getFactoryTemp(), traceProperties.getNormalTempThreshold())));
                             curveTemp = detail.getFactoryTemp();
                         }
                     }
@@ -184,14 +245,14 @@ public class TraceChainService {
                                 certificates.add(new CertificateVO("运输工具编号", detail.getTransportToolNo()));
                             }
                             temperatures.add(new TemperatureItemVO("入库温度", detail.getInboundTemp(),
-                                    Constants.TEMP_THRESHOLD_NORMAL,
-                                    ColdChainService.isQualified(detail.getInboundTemp(), Constants.TEMP_THRESHOLD_NORMAL)));
+                                    traceProperties.getNormalTempThreshold(),
+                                    ColdChainService.isQualified(detail.getInboundTemp(), traceProperties.getNormalTempThreshold())));
                             temperatures.add(new TemperatureItemVO("冷库温度", detail.getColdStorageTemp(),
-                                    Constants.TEMP_THRESHOLD_NORMAL,
-                                    ColdChainService.isQualified(detail.getColdStorageTemp(), Constants.TEMP_THRESHOLD_NORMAL)));
+                                    traceProperties.getNormalTempThreshold(),
+                                    ColdChainService.isQualified(detail.getColdStorageTemp(), traceProperties.getNormalTempThreshold())));
                             temperatures.add(new TemperatureItemVO("出库温度", detail.getOutboundTemp(),
-                                    Constants.TEMP_THRESHOLD_NORMAL,
-                                    ColdChainService.isQualified(detail.getOutboundTemp(), Constants.TEMP_THRESHOLD_NORMAL)));
+                                    traceProperties.getNormalTempThreshold(),
+                                    ColdChainService.isQualified(detail.getOutboundTemp(), traceProperties.getNormalTempThreshold())));
                             curveTemp = detail.getOutboundTemp();
                         }
                     }
@@ -199,8 +260,8 @@ public class TraceChainService {
                         BatchRetail detail = retailMap.get(batch.getId());
                         if (detail != null) {
                             temperatures.add(new TemperatureItemVO("冷冻陈列柜温度", detail.getDisplayTemp(),
-                                    Constants.TEMP_THRESHOLD_NORMAL,
-                                    ColdChainService.isQualified(detail.getDisplayTemp(), Constants.TEMP_THRESHOLD_NORMAL)));
+                                    traceProperties.getNormalTempThreshold(),
+                                    ColdChainService.isQualified(detail.getDisplayTemp(), traceProperties.getNormalTempThreshold())));
                             curveTemp = detail.getDisplayTemp();
                         }
                     }
@@ -239,8 +300,8 @@ public class TraceChainService {
                     .stageName(stageName(type))
                     .enterpriseName(batch.getEnterpriseName())
                     .temperature(curveTemp)
-                    .threshold(Constants.TEMP_THRESHOLD_NORMAL)
-                    .qualified(stageOk && ColdChainService.isQualified(curveTemp, Constants.TEMP_THRESHOLD_NORMAL))
+                    .threshold(traceProperties.getNormalTempThreshold())
+                    .qualified(stageOk && ColdChainService.isQualified(curveTemp, traceProperties.getNormalTempThreshold()))
                     .recordTime(batch.getPublishTime())
                     .build());
         }
@@ -248,22 +309,26 @@ public class TraceChainService {
         boolean coldChainQualified = abnormalStages.isEmpty();
         NodeEnterprise retailer = enterpriseMap.get(traceCode.getRetailerId());
 
-        // 读路径只做内存自增，真正的 UPDATE 由定时任务批量完成
-        queryCounter.record(traceCode.getId());
+        return new TraceChainSnapshot(
+                retailer == null ? null : retailer.getEnterpriseName(),
+                coldChainQualified,
+                buildConclusion(chain.size(), coldChainQualified, abnormalStages),
+                List.copyOf(curve),
+                List.copyOf(links));
+    }
 
-        return PublicTraceVO.builder()
-                .traceCode(traceCode.getTraceCode())
-                .batchNo(traceCode.getBatchNo())
-                .productVariety(traceCode.getProductVariety())
-                .retailerName(retailer == null ? traceCode.getRetailerName() : retailer.getEnterpriseName())
-                .saleStore(traceCode.getSaleStore())
-                .generateTime(traceCode.getGenerateTime())
-                .queryCount((int) queryCounter.currentCount(traceCode.getId(), traceCode.getQueryCount()))
-                .coldChainQualified(coldChainQualified)
-                .coldChainConclusion(buildConclusion(chain.size(), coldChainQualified, abnormalStages))
-                .temperatureCurve(curve)
-                .links(links)
-                .build();
+    /**
+     * 溯源链快照（缓存单元）。
+     *
+     * <p>用 record 而非 Map：字段语义明确，且 Jackson 2.12+ 原生支持 record 的
+     * 规范构造器反序列化，不需要像普通 VO 那样担心"@Builder 吃掉无参构造器"。
+     */
+    public record TraceChainSnapshot(
+            String retailerName,
+            boolean coldChainQualified,
+            String coldChainConclusion,
+            List<TemperaturePointVO> temperatureCurve,
+            List<TraceLinkVO> links) {
     }
 
     /**

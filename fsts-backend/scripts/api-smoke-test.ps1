@@ -124,6 +124,14 @@ Write-Case '主键 userId 以字符串返回（防 JS 精度丢失）' ($adminLo
 Write-Case 'expiresIn = 7200' ($adminBody.data.expiresIn -eq 7200) $adminLogin.Body
 $adminToken = $adminBody.data.token
 
+# 管理员改密（接口 4.8）：只验证校验分支，避免改动演示库里的 admin 口令
+$adminPwdBad = Invoke-Api -Method Put -Path '/api/admin/auth/password' -Token $adminToken -JsonBody '{"oldPassword":"not-the-password","newPassword":"Fsts@2026","confirmPassword":"Fsts@2026"}'
+Write-Case '管理员改密：原密码错误返回 400' ($adminPwdBad.Code -eq 400) $adminPwdBad.Body
+$adminPwdMismatch = Invoke-Api -Method Put -Path '/api/admin/auth/password' -Token $adminToken -JsonBody '{"oldPassword":"123456","newPassword":"Fsts@2026","confirmPassword":"Fsts@2027"}'
+Write-Case '管理员改密：两次新密码不一致返回 400' ($adminPwdMismatch.Code -eq 400) $adminPwdMismatch.Body
+$adminPwdAnon = Invoke-Api -Method Put -Path '/api/admin/auth/password' -JsonBody '{"oldPassword":"123456","newPassword":"Fsts@2026","confirmPassword":"Fsts@2026"}'
+Write-Case '管理员改密：未登录返回 HTTP 401' ($adminPwdAnon.Http -eq 401) $adminPwdAnon.Body
+
 # -----------------------------------------------------------------------------
 Write-Section '附录 G-2 大屏统计'
 $ov = Convert-Body (Invoke-Api -Method Get -Path '/api/admin/statistics/overview' -Token $adminToken)
@@ -133,7 +141,14 @@ Write-Case '覆盖省份数 = 8' ($ov.data.provinceCount -eq 8) ($ov | ConvertTo
 
 $trend = Convert-Body (Invoke-Api -Method Get -Path '/api/admin/statistics/register-trend?months=12' -Token $adminToken)
 Write-Case '趋势横轴 12 个月连续' ($trend.data.months.Count -eq 12) ($trend | ConvertTo-Json -Compress)
-Write-Case '趋势无数据月份已补 0（合计等于企业总数）' (($trend.data.counts | Measure-Object -Sum).Sum -eq 16) ($trend.data.counts -join ',')
+<#
+    注意：这里不能断言"趋势合计 = 企业总数"。
+    横轴是"最近 12 个月"，而演示数据里有企业的注册时间在 2025-10，
+    随着真实日期推进它们会滑出 12 个月窗口，合计自然小于企业总数。
+    稳定的断言是"补 0 之后合计为正且不超过企业总数"。
+#>
+$trendSum = ($trend.data.counts | Measure-Object -Sum).Sum
+Write-Case '趋势补 0 后合计为正且不超过企业总数' ($trendSum -gt 0 -and $trendSum -le 16) ("sum=" + $trendSum)
 
 $prov = Convert-Body (Invoke-Api -Method Get -Path '/api/admin/statistics/province-distribution?top=3' -Token $adminToken)
 Write-Case '省分布 top=3 且含 percent' ($prov.data.Count -eq 3 -and $prov.data[0].percent -eq 25.00) ($prov | ConvertTo-Json -Compress)
@@ -225,6 +240,126 @@ Write-Case '烟台海珍看到上海甬海的待确认请求' ($pending.data.tot
 $confirmed = Convert-Body (Invoke-Api -Method Put -Path '/api/enterprise/confirm-requests/2/confirm' -Token $procToken -JsonBody '{"handleRemark":"冒烟测试：同意确认"}')
 Write-Case '确认后请求状态置 2' ($confirmed.code -eq 200 -and $confirmed.data.requestStatus -eq 2) ($confirmed | ConvertTo-Json -Compress)
 Write-Case '确认后下游批号状态置 3' ($confirmed.data.batchStatus -eq 3) ($confirmed | ConvertTo-Json -Compress)
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-17/18/19 撤回进场确认请求（接口 11.5）'
+
+<#
+    撤回的三条关键规则：
+      1. 只有发起方可以撤回（接收方调用 403）；
+      2. 只有待确认(1)时可以撤回（已处理返回 409）；
+      3. 撤回后请求置 4、下游批号回退为 1。
+    这里先造一条新的待确认请求，避免依赖既有演示数据的状态。
+#>
+$withdrawBatchNo = 'SMOKE-WD-' + $suffix
+$withdrawBody = '{"batchNo":"' + $withdrawBatchNo + '","upstreamEnterpriseId":"1","upstreamBatchId":"1","processForm":"鱼片","inspectionNo":"CYJ-WD-' + $suffix + '","quickFreezeTemp":-36.00,"factoryTemp":-19.20,"sendConfirmRequest":true}'
+$withdrawCreated = Convert-Body (Invoke-Api -Method Post -Path '/api/enterprise/batches' -Token $procToken -JsonBody $withdrawBody)
+Write-Case '加工企业新建批号（含上游）成功且状态为待确认' ($withdrawCreated.code -eq 200 -and $withdrawCreated.data.batchStatus -eq 2) ($withdrawCreated | ConvertTo-Json -Compress)
+
+$withdrawBatchId = $withdrawCreated.data.id
+$withdrawDetail = Convert-Body (Invoke-Api -Method Get -Path ('/api/enterprise/batches/' + $withdrawBatchId) -Token $procToken)
+Write-Case '批号详情下发 confirmRequest.requestId' ($null -ne $withdrawDetail.data.confirmRequest.requestId) ($withdrawDetail | ConvertTo-Json -Compress)
+$withdrawRequestId = $withdrawDetail.data.confirmRequest.requestId
+
+$fishWithdraw = Invoke-Api -Method Put -Path ('/api/enterprise/confirm-requests/' + $withdrawRequestId + '/withdraw') -Token $fishToken
+Write-Case '接收方撤回他人请求返回 403' ($fishWithdraw.Code -eq 403) $fishWithdraw.Body
+
+$withdraw = Convert-Body (Invoke-Api -Method Put -Path ('/api/enterprise/confirm-requests/' + $withdrawRequestId + '/withdraw') -Token $procToken -JsonBody '{"handleRemark":"冒烟测试：撤回后修正"}')
+Write-Case '发起方撤回后请求状态置 4' ($withdraw.code -eq 200 -and $withdraw.data.requestStatus -eq 4) ($withdraw | ConvertTo-Json -Compress)
+Write-Case '撤回后下游批号回退为 1（新建）' ($withdraw.data.batchStatus -eq 1) ($withdraw | ConvertTo-Json -Compress)
+
+$withdrawAgain = Invoke-Api -Method Put -Path ('/api/enterprise/confirm-requests/' + $withdrawRequestId + '/withdraw') -Token $procToken
+Write-Case '对已撤回的请求再次撤回返回 409' ($withdrawAgain.Code -eq 409) $withdrawAgain.Body
+
+Invoke-Api -Method Delete -Path ('/api/enterprise/batches/' + $withdrawBatchId) -Token $procToken | Out-Null
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-15 源头企业新建批号（product_variety 非空回归）'
+
+$fishBatchNo = 'SMOKE-FISH-' + $suffix
+$fishBody = '{"batchNo":"' + $fishBatchNo + '","productVariety":"冒烟测试带鱼","sourceType":2,"catchBreedDate":"2026-10-15","certificateType":2,"certificateNo":"CERT-SMOKE-' + $suffix + '","departureTemp":-19.50}'
+$fishCreated = Convert-Body (Invoke-Api -Method Post -Path '/api/enterprise/batches' -Token $fishToken -JsonBody $fishBody)
+Write-Case '捕捞企业新建批号成功（品种落库、状态 1）' ($fishCreated.code -eq 200 -and $fishCreated.data.batchStatus -eq 1) ($fishCreated | ConvertTo-Json -Compress)
+$fishDetail = Convert-Body (Invoke-Api -Method Get -Path ('/api/enterprise/batches/' + $fishCreated.data.id) -Token $fishToken)
+Write-Case '源头批号详情带出捕捞环节明细' ($fishDetail.data.fishingInfo.certificateType -eq 2 -and $fishDetail.data.productVariety -eq '冒烟测试带鱼') ($fishDetail | ConvertTo-Json -Compress)
+Invoke-Api -Method Delete -Path ('/api/enterprise/batches/' + $fishCreated.data.id) -Token $fishToken | Out-Null
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-20 越级挂靠被拒（上游企业类型校验）'
+
+<#
+    回归背景：查询接口 9.1/9.2 会按当前企业类型过滤上游企业，但写入接口最初没有做同样的校验，
+    直接调用 10.3 就能让零售商把批号挂到捕捞企业的批号上，造出"捕捞 → 零售"的断链，
+    而消费者端仍显示"冷链未断链"。这里锁定该漏洞不再出现。
+#>
+$retailJumpToken = Get-Token 'sh_jiaxian' $DefaultPassword
+$jumpBody = '{"batchNo":"SMOKE-JUMP-' + $suffix + '","upstreamEnterpriseId":"1","upstreamBatchId":"1","shelfDate":"2026-10-15","displayTemp":-19.00,"saleStore":"冒烟测试门店"}'
+$jump = Invoke-Api -Method Post -Path '/api/enterprise/batches' -Token $retailJumpToken -JsonBody $jumpBody
+Write-Case '零售商越级挂靠捕捞批号返回 400' ($jump.Code -eq 400) $jump.Body
+
+$legalBody = '{"batchNo":"SMOKE-LEGAL-' + $suffix + '","upstreamEnterpriseId":"3","upstreamBatchId":"3","shelfDate":"2026-10-15","displayTemp":-19.00,"saleStore":"冒烟测试门店"}'
+$legal = Convert-Body (Invoke-Api -Method Post -Path '/api/enterprise/batches' -Token $retailJumpToken -JsonBody $legalBody)
+Write-Case '零售商挂到批发批号（合法）返回 200' ($legal.code -eq 200) ($legal | ConvertTo-Json -Compress)
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-21 下架与恢复上架（接口 10.7 / 10.11）'
+
+$legalBatchId = $legal.data.id
+# 刚建的批号还是"新建"状态，下架应当被拒（顺带锁定状态机边界）
+$earlyOffShelf = Invoke-Api -Method Put -Path ('/api/enterprise/batches/' + $legalBatchId + '/off-shelf') -Token $retailJumpToken -JsonBody '{"remark":"冒烟测试：未确认不应允许下架"}'
+Write-Case '未确认批号不允许下架（2005）' ($earlyOffShelf.Code -eq 2005) $earlyOffShelf.Body
+
+# 用演示批号 LS20260915001（id=4，已确认）验证"下架→溯源码失效→恢复→溯源码重新有效"
+$retailOff = Invoke-Api -Method Put -Path '/api/enterprise/batches/4/off-shelf' -Token $retailJumpToken -JsonBody '{"remark":"冒烟测试：验证恢复上架"}'
+Write-Case '零售商批号下架成功' ($retailOff.Code -eq 200) $retailOff.Body
+$invalidTrace = Invoke-Api -Method Get -Path '/api/public/trace/FSTS-20260915-SH-0001'
+Write-Case '下架后消费者查询返回 3002' ($invalidTrace.Code -eq 3002) $invalidTrace.Body
+
+$restore = Convert-Body (Invoke-Api -Method Put -Path '/api/enterprise/batches/4/restore' -Token $retailJumpToken)
+Write-Case '恢复上架后批号状态回到 3' ($restore.code -eq 200 -and $restore.data.batchStatus -eq 3) ($restore | ConvertTo-Json -Compress)
+$restoredTrace = Invoke-Api -Method Get -Path '/api/public/trace/FSTS-20260915-SH-0001'
+Write-Case '恢复上架后溯源查询重新可用' ($restoredTrace.Code -eq 200) $restoredTrace.Body
+
+$restoreAgain = Invoke-Api -Method Put -Path '/api/enterprise/batches/4/restore' -Token $retailJumpToken
+Write-Case '对已上架批号再次恢复返回 2005' ($restoreAgain.Code -eq 2005) $restoreAgain.Body
+
+# 清理本次新建的两条测试批号（均为"新建"状态，可物理删除）
+Invoke-Api -Method Delete -Path ('/api/enterprise/batches/' + $legalBatchId) -Token $retailJumpToken | Out-Null
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-22 批量导入（接口 10.12）'
+
+$importRows = @"
+{"rows":[
+  {"rowNo":2,"batchNo":"SMOKE-IMP-A-$suffix","upstreamBatchNo":"YY20260901001","processForm":"鱼片","inspectionNo":"CYJ-IMP-A","quickFreezeTemp":-36.00,"factoryTemp":-19.00},
+  {"rowNo":3,"batchNo":"SMOKE-IMP-B-$suffix","upstreamBatchNo":"YY20260901001","processForm":"鱼段","inspectionNo":"CYJ-IMP-B","quickFreezeTemp":-36.00,"factoryTemp":-19.10},
+  {"rowNo":4,"batchNo":"SMOKE-IMP-C-$suffix","upstreamBatchNo":"NOT-EXIST-BATCH","processForm":"鱼块","inspectionNo":"CYJ-IMP-C","quickFreezeTemp":-36.00,"factoryTemp":-19.20},
+  {"rowNo":5,"batchNo":"","upstreamBatchNo":"YY20260901001","processForm":"鱼柳","inspectionNo":"CYJ-IMP-D","quickFreezeTemp":-36.00,"factoryTemp":-19.30}
+]}
+"@
+$imported = Convert-Body (Invoke-Api -Method Post -Path '/api/enterprise/batches/import' -Token $procToken -JsonBody $importRows)
+Write-Case '批量导入 4 行，成功 2 行失败 2 行' ($imported.data.total -eq 4 -and $imported.data.successCount -eq 2 -and $imported.data.failureCount -eq 2) ($imported | ConvertTo-Json -Compress)
+Write-Case '失败行带回具体原因（上游批号不存在 / 批号为空）' (($imported.data.items | Where-Object { -not $_.success }).Count -eq 2 -and ($imported.data.items | Where-Object { $_.rowNo -eq 4 }).message -match '上游批号') ($imported.data.items | ConvertTo-Json -Compress)
+
+# 清理导入成功的两条批号
+foreach ($item in ($imported.data.items | Where-Object { $_.success })) {
+    Invoke-Api -Method Delete -Path ('/api/enterprise/batches/' + $item.batchId) -Token $procToken | Out-Null
+}
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-23 大屏业务指标（接口 7.6）'
+
+$metrics = Convert-Body (Invoke-Api -Method Get -Path '/api/admin/statistics/business' -Token $adminToken)
+Write-Case '业务指标包含批号/冷链/确认/溯源码四类计数' ($null -ne $metrics.data.totalBatchCount -and $null -ne $metrics.data.coldChainAbnormalCount -and $null -ne $metrics.data.pendingConfirmCount -and $null -ne $metrics.data.validTraceCodeCount) ($metrics | ConvertTo-Json -Compress)
+Write-Case '计数保持数值类型（便于前端直接绘图）' (($metrics.data.totalBatchCount -is [int]) -or ($metrics.data.totalBatchCount -is [long])) ($metrics.data.totalBatchCount.GetType().Name)
+
+# -----------------------------------------------------------------------------
+Write-Section '附录 G-24 溯源码校验位（历史码兼容）'
+
+$legacyCode = Invoke-Api -Method Get -Path '/api/public/trace/FSTS-20260915-SH-0001'
+Write-Case '不带校验位的历史码仍可查询' ($legacyCode.Code -eq 200) $legacyCode.Body
+$wrongDigit = Invoke-Api -Method Get -Path '/api/public/trace/FSTS-20260915-SH-0001-9'
+Write-Case '校验位不正确时返回 3001 且提示校验位' ($wrongDigit.Code -eq 3001 -and $wrongDigit.Body -match '校验位') $wrongDigit.Body
 
 # -----------------------------------------------------------------------------
 Write-Section '附录 G-10/11 溯源码与消费者溯源链'

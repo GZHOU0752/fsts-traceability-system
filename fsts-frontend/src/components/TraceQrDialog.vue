@@ -42,7 +42,13 @@ async function copy(value?: string, tip = '已复制') {
 }
 
 function download() {
-  qrRef.value?.download(props.info?.traceCode)
+  // 二维码组件是异步加载的，首次打开对话框时 ref 可能还没就绪；
+  // 这里显式提示，避免"点了下载没有任何反应"。
+  if (!qrRef.value) {
+    ElMessage.warning('二维码还在生成中，请稍后再试')
+    return
+  }
+  qrRef.value.download(props.info?.traceCode)
 }
 
 function print() {
@@ -63,6 +69,11 @@ function print() {
     ElMessage.warning('浏览器拦截了打印窗口，请允许弹出窗口后重试')
   }
 }
+
+/** 二维码生成失败/未完成时由子组件抛出，这里统一提示，避免静默失败 */
+function onQrError(message: string) {
+  ElMessage.warning(message)
+}
 </script>
 <template>
   <el-dialog v-model="visible" title="图形化溯源码" width="min(520px, 94vw)" class="trace-qr-dialog" destroy-on-close>
@@ -72,7 +83,15 @@ function print() {
         <span>{{ info.productVariety || '品种未填写' }}<template v-if="info.saleStore"> · {{ info.saleStore }}</template></span>
         <StatusTag :label="info.statusName || '有效'" :tone="info.status === 1 ? 'success' : 'info'" />
       </div>
-      <TraceQrCode ref="qrRef" :value="traceLink" :link="traceLink" :code="info.traceCode" :size="176" :caption="`用手机相机或微信扫码即可打开本批次追溯页 · 生成于 ${info.generateTime || '—'}`" />
+      <TraceQrCode
+        ref="qrRef"
+        :value="traceLink"
+        :link="traceLink"
+        :code="info.traceCode"
+        :size="176"
+        :caption="`用手机相机或微信扫码即可打开本批次追溯页 · 生成于 ${info.generateTime || '—'}`"
+        @error="onQrError"
+      />
     </div>
     <template #footer>
       <el-button size="small" :icon="CopyDocument" @click="copy(info?.traceCode, '溯源码已复制')">溯源码</el-button>

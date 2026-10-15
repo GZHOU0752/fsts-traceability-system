@@ -8,6 +8,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/admin', component: () => import('@/layouts/WorkbenchLayout.vue'), redirect: '/admin/dashboard', meta: { role: 'admin' }, children: [
     { path: 'dashboard', component: () => import('@/views/admin/DashboardView.vue'), meta: { title: '运营总览', icon: 'DataAnalysis' } },
     { path: 'enterprises', component: () => import('@/views/admin/EnterpriseListView.vue'), meta: { title: '节点企业', icon: 'OfficeBuilding' } },
+    { path: 'profile', component: () => import('@/views/admin/ProfileView.vue'), meta: { title: '账号安全', icon: 'Lock' } },
   ] },
   { path: '/enterprise/login', component: () => import('@/views/enterprise/LoginView.vue'), meta: { public: true, bare: true, title: '企业端登录' } },
   { path: '/enterprise', component: () => import('@/layouts/WorkbenchLayout.vue'), redirect: '/enterprise/batches', meta: { role: 'enterprise' }, children: [

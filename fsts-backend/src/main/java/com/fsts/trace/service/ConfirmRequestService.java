@@ -20,6 +20,7 @@ import com.fsts.trace.mapper.BatchProcessingMapper;
 import com.fsts.trace.mapper.BatchWholesaleMapper;
 import com.fsts.trace.mapper.NodeEnterpriseMapper;
 import com.fsts.trace.mapper.ProductBatchMapper;
+import com.fsts.trace.service.support.BatchStatusLogger;
 import com.fsts.trace.vo.ConfirmRequestDetailVO;
 import com.fsts.trace.vo.ConfirmRequestListItemVO;
 import com.fsts.trace.vo.ConfirmRequestSendVO;
@@ -29,6 +30,7 @@ import com.fsts.trace.vo.PageVO;
 import com.fsts.trace.vo.RejectResultVO;
 import com.fsts.trace.vo.TraceCodeInfoVO;
 import com.fsts.trace.vo.UpstreamBatchSimpleVO;
+import com.fsts.trace.vo.WithdrawResultVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,6 +52,7 @@ public class ConfirmRequestService {
     private final DictService dictService;
     private final TraceCodeService traceCodeService;
     private final EnterpriseBatchService batchService;
+    private final BatchStatusLogger statusLogger;
 
     public ConfirmRequestService(BatchConfirmRequestMapper confirmRequestMapper,
                                  ProductBatchMapper batchMapper,
@@ -58,7 +61,8 @@ public class ConfirmRequestService {
                                  NodeEnterpriseMapper enterpriseMapper,
                                  DictService dictService,
                                  TraceCodeService traceCodeService,
-                                 EnterpriseBatchService batchService) {
+                                 EnterpriseBatchService batchService,
+                                 BatchStatusLogger statusLogger) {
         this.confirmRequestMapper = confirmRequestMapper;
         this.batchMapper = batchMapper;
         this.processingMapper = processingMapper;
@@ -67,6 +71,7 @@ public class ConfirmRequestService {
         this.dictService = dictService;
         this.traceCodeService = traceCodeService;
         this.batchService = batchService;
+        this.statusLogger = statusLogger;
     }
 
     // ==================================================================
@@ -268,6 +273,8 @@ public class ConfirmRequestService {
         }
 
         ProductBatch downstream = batchMapper.selectById(request.getBatchId());
+        statusLogger.record(downstream, Constants.BATCH_STATUS_PENDING, Constants.BATCH_STATUS_CONFIRMED,
+                BatchStatusLogger.ACTION_CONFIRM, handleRemark, user);
         TraceCodeInfoVO traceCodeInfo = null;
         if (downstream != null
                 && downstream.getEnterpriseType() != null
@@ -334,12 +341,71 @@ public class ConfirmRequestService {
         if (batchAffected == 0) {
             throw BusinessException.of(ErrorCode.CONFLICT, "下游批号状态异常，无法回退");
         }
+        statusLogger.record(batchMapper.selectById(request.getBatchId()),
+                Constants.BATCH_STATUS_PENDING, Constants.BATCH_STATUS_NEW,
+                BatchStatusLogger.ACTION_REJECT, handleRemark, user);
 
         return RejectResultVO.builder()
                 .requestId(request.getId())
                 .requestStatus(Constants.REQUEST_STATUS_REJECTED)
                 .requestStatusName(dictService.requestStatusName(Constants.REQUEST_STATUS_REJECTED))
                 .batchId(request.getBatchId())
+                .batchStatus(Constants.BATCH_STATUS_NEW)
+                .batchStatusName(dictService.batchStatusName(Constants.BATCH_STATUS_NEW))
+                .build();
+    }
+
+    // ==================================================================
+    // 11.5 撤回进场确认请求（扩展）
+    // ==================================================================
+
+    /**
+     * 撤回进场确认请求（接口 11.5）。
+     *
+     * <p>撤回权只属于<b>发起方</b>（下游企业），且只允许在上游尚未处理时行使：
+     * 上游一旦确认或拒绝，批号状态已经随之变化，此时再由下游单方面撤回，
+     * 会让溯源链出现"批号已确认但请求已被撤回"的矛盾记录，因此统一返回 409。
+     *
+     * <p>撤回后请求状态置 4（已撤回），下游批号回退为"新建(1)"，
+     * 用户可以修正数据后重新发起；与拒绝的差别在于发起方是自己，故不做角色限制
+     * （零售商同样会发起确认请求，不能套用"零售商无下游确认"的判定）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public WithdrawResultVO withdraw(LoginUser user, Long id, String handleRemark) {
+        BatchConfirmRequest request = confirmRequestMapper.selectById(id);
+        if (request == null) {
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "确认请求不存在");
+        }
+        if (request.getFromEnterpriseId() == null
+                || !request.getFromEnterpriseId().equals(user.getEnterpriseId())) {
+            throw BusinessException.of(ErrorCode.FORBIDDEN, "只有请求发起方可以撤回该请求");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        int affected = confirmRequestMapper.withdrawIfPending(id, user.getEnterpriseId(), now, handleRemark);
+        if (affected == 0) {
+            throw BusinessException.of(ErrorCode.CONFLICT, "该请求已被上游处理，无法撤回，请刷新后查看");
+        }
+
+        int batchAffected = batchMapper.revertToNewIfPending(request.getBatchId());
+        if (batchAffected == 0) {
+            throw BusinessException.of(ErrorCode.CONFLICT, "下游批号状态异常，无法回退");
+        }
+        statusLogger.record(batchMapper.selectById(request.getBatchId()),
+                Constants.BATCH_STATUS_PENDING, Constants.BATCH_STATUS_NEW,
+                BatchStatusLogger.ACTION_WITHDRAW, handleRemark, user);
+
+        log.info("下游企业撤回进场确认请求: enterpriseId={} requestNo={} batchId={}",
+                user.getEnterpriseId(), request.getRequestNo(), request.getBatchId());
+
+        return WithdrawResultVO.builder()
+                .requestId(request.getId())
+                .requestNo(request.getRequestNo())
+                .requestStatus(Constants.REQUEST_STATUS_WITHDRAWN)
+                .requestStatusName(dictService.requestStatusName(Constants.REQUEST_STATUS_WITHDRAWN))
+                .handleTime(now)
+                .batchId(request.getBatchId())
+                .batchNo(request.getBatchNo())
                 .batchStatus(Constants.BATCH_STATUS_NEW)
                 .batchStatusName(dictService.batchStatusName(Constants.BATCH_STATUS_NEW))
                 .build();

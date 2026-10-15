@@ -12,18 +12,21 @@ import com.fsts.trace.dto.request.BatchSaveRequest;
 import com.fsts.trace.dto.request.BatchUpdateRequest;
 import com.fsts.trace.dto.request.OffShelfRequest;
 import com.fsts.trace.entity.BatchConfirmRequest;
+import com.fsts.trace.entity.BatchStatusLog;
 import com.fsts.trace.entity.BatchFishing;
 import com.fsts.trace.entity.BatchProcessing;
 import com.fsts.trace.entity.BatchRetail;
 import com.fsts.trace.entity.BatchWholesale;
 import com.fsts.trace.entity.ProductBatch;
 import com.fsts.trace.mapper.BatchConfirmRequestMapper;
+import com.fsts.trace.mapper.BatchStatusLogMapper;
 import com.fsts.trace.mapper.BatchFishingMapper;
 import com.fsts.trace.mapper.BatchProcessingMapper;
 import com.fsts.trace.mapper.BatchRetailMapper;
 import com.fsts.trace.mapper.BatchWholesaleMapper;
 import com.fsts.trace.mapper.ProductBatchMapper;
 import com.fsts.trace.service.support.ColdChainService;
+import com.fsts.trace.service.support.BatchStatusLogger;
 import com.fsts.trace.support.sequence.SequenceService;
 import com.fsts.trace.service.validator.BatchValidatorRegistry;
 import com.fsts.trace.vo.BatchDetailVO;
@@ -33,6 +36,7 @@ import com.fsts.trace.vo.BatchProcessingInfoVO;
 import com.fsts.trace.vo.BatchPublishResultVO;
 import com.fsts.trace.vo.BatchRetailInfoVO;
 import com.fsts.trace.vo.BatchSaveResultVO;
+import com.fsts.trace.vo.BatchStatusLogVO;
 import com.fsts.trace.vo.BatchWholesaleInfoVO;
 import com.fsts.trace.vo.CheckAvailableVO;
 import com.fsts.trace.vo.ConfirmRequestBriefVO;
@@ -44,6 +48,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 流通节点端 - 产品批号管理（接口 10.1 ~ 10.8、10.10）。
@@ -64,6 +70,8 @@ public class EnterpriseBatchService {
     private final DictService dictService;
     private final TraceCodeService traceCodeService;
     private final SequenceService sequenceService;
+    private final BatchStatusLogMapper statusLogMapper;
+    private final BatchStatusLogger statusLogger;
 
     public EnterpriseBatchService(ProductBatchMapper batchMapper,
                                   BatchFishingMapper fishingMapper,
@@ -76,7 +84,9 @@ public class EnterpriseBatchService {
                                   UpstreamService upstreamService,
                                   DictService dictService,
                                   TraceCodeService traceCodeService,
-                                  SequenceService sequenceService) {
+                                  SequenceService sequenceService,
+                                  BatchStatusLogMapper statusLogMapper,
+                                  BatchStatusLogger statusLogger) {
         this.batchMapper = batchMapper;
         this.fishingMapper = fishingMapper;
         this.processingMapper = processingMapper;
@@ -89,6 +99,8 @@ public class EnterpriseBatchService {
         this.dictService = dictService;
         this.traceCodeService = traceCodeService;
         this.sequenceService = sequenceService;
+        this.statusLogMapper = statusLogMapper;
+        this.statusLogger = statusLogger;
     }
 
     // ==================================================================
@@ -190,7 +202,33 @@ public class EnterpriseBatchService {
 
         builder.traceCode(loadTraceCodeInfo(batch.getId()));
         builder.confirmRequest(loadConfirmRequestBrief(batch.getId()));
+        builder.statusLogs(loadStatusLogs(batch.getId()));
         return builder.build();
+    }
+
+    /**
+     * 状态流转记录（接口 10.2 {@code statusLogs}）：按时间升序，前端渲染成时间线。
+     */
+    private List<BatchStatusLogVO> loadStatusLogs(Long batchId) {
+        List<BatchStatusLog> logs = statusLogMapper.selectList(Wrappers.<BatchStatusLog>lambdaQuery()
+                .eq(BatchStatusLog::getBatchId, batchId)
+                .orderByAsc(BatchStatusLog::getId));
+        List<BatchStatusLogVO> result = new ArrayList<>(logs.size());
+        for (BatchStatusLog item : logs) {
+            result.add(BatchStatusLogVO.builder()
+                    .fromStatus(item.getFromStatus())
+                    .fromStatusName(dictService.batchStatusName(item.getFromStatus()))
+                    .toStatus(item.getToStatus())
+                    .toStatusName(dictService.batchStatusName(item.getToStatus()))
+                    .action(item.getAction())
+                    .operatorType(item.getOperatorType())
+                    .operatorId(item.getOperatorId())
+                    .operatorName(item.getOperatorName())
+                    .remark(item.getRemark())
+                    .createTime(item.getCreateTime())
+                    .build());
+        }
+        return result;
     }
 
     // ==================================================================
@@ -219,7 +257,7 @@ public class EnterpriseBatchService {
         batch.setDeleted(0);
         batch.setBatchStatus(Constants.BATCH_STATUS_NEW);
 
-        applyUpstreamIfNeeded(batch, request, type);
+        applyVarietyAndSource(batch, request, type);
 
         ColdChainService.ColdChainResult coldChain = coldChainService.judge(type, request);
         coldChainService.assertAcceptable(coldChain, request.getForceSubmit());
@@ -228,6 +266,9 @@ public class EnterpriseBatchService {
 
         batchMapper.insert(batch);
         insertDetail(batch.getId(), type, request);
+        // 状态流转留痕：新建（null -> 1）；随后若直接发布或发送确认请求，会各记一条
+        statusLogger.record(batch, null, Constants.BATCH_STATUS_NEW,
+                BatchStatusLogger.ACTION_CREATE, request.getRemark(), user);
 
         String confirmRequestNo = advanceStatusAfterSave(user, batch, type, request, coldChain.handoverTemp());
 
@@ -258,7 +299,7 @@ public class EnterpriseBatchService {
         Integer type = user.getEnterpriseType();
         validatorRegistry.of(type).validate(request);
 
-        applyUpstreamIfNeeded(batch, request, type);
+        applyVarietyAndSource(batch, request, type);
 
         ColdChainService.ColdChainResult coldChain = coldChainService.judge(type, request);
         coldChainService.assertAcceptable(coldChain, request.getForceSubmit());
@@ -318,6 +359,8 @@ public class EnterpriseBatchService {
         if (affected == 0) {
             throw BusinessException.of(ErrorCode.BATCH_STATUS_NOT_ALLOWED, "批号状态已变化，请刷新后重试");
         }
+        statusLogger.record(batch, Constants.BATCH_STATUS_NEW, Constants.BATCH_STATUS_CONFIRMED,
+                BatchStatusLogger.ACTION_PUBLISH, null, user);
         return BatchPublishResultVO.builder()
                 .id(batch.getId())
                 .batchNo(batch.getBatchNo())
@@ -354,6 +397,8 @@ public class EnterpriseBatchService {
                 && batch.getEnterpriseType() == Constants.ENTERPRISE_TYPE_RETAIL) {
             traceCodeService.invalidateByBatchId(id);
         }
+        statusLogger.record(batch, Constants.BATCH_STATUS_CONFIRMED, Constants.BATCH_STATUS_OFF_SHELF,
+                BatchStatusLogger.ACTION_OFF_SHELF, remark, user);
 
         return BatchPublishResultVO.builder()
                 .id(batch.getId())
@@ -367,6 +412,46 @@ public class EnterpriseBatchService {
     // ==================================================================
     // 10.8 唯一性校验
     // ==================================================================
+
+    // ==================================================================
+    // 10.11 恢复上架（下架的可逆路径）
+    // ==================================================================
+
+    /**
+     * 恢复上架（接口 10.11）：已下架(4) -> 已确认/已发布(3)。
+     *
+     * <p>下架会连带失效零售商的溯源标识码，误操作的影响面很大，
+     * 因此提供一条可逆路径：恢复后标识码重新生效，下游可以重新选择该批号。
+     * 注意 10.1 列表按需求不返回已下架批号，所以恢复入口是"下架成功后 60 秒内的撤销条"
+     * 与批号详情，而不是一个"已下架"分组。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public BatchPublishResultVO restore(LoginUser user, Long id) {
+        ProductBatch batch = requireOwnedBatch(user, id);
+        if (batch.getBatchStatus() == null
+                || batch.getBatchStatus() != Constants.BATCH_STATUS_OFF_SHELF) {
+            throw BusinessException.of(ErrorCode.BATCH_STATUS_NOT_ALLOWED, "仅已下架的批号允许恢复上架");
+        }
+        int affected = batchMapper.restoreIfOffShelf(id, user.getEnterpriseId());
+        if (affected == 0) {
+            throw BusinessException.of(ErrorCode.BATCH_STATUS_NOT_ALLOWED, "批号状态已变化，请刷新后重试");
+        }
+
+        if (batch.getEnterpriseType() != null
+                && batch.getEnterpriseType() == Constants.ENTERPRISE_TYPE_RETAIL) {
+            traceCodeService.reactivateByBatchId(id);
+        }
+        statusLogger.record(batch, Constants.BATCH_STATUS_OFF_SHELF, Constants.BATCH_STATUS_CONFIRMED,
+                BatchStatusLogger.ACTION_RESTORE, null, user);
+
+        return BatchPublishResultVO.builder()
+                .id(batch.getId())
+                .batchNo(batch.getBatchNo())
+                .batchStatus(Constants.BATCH_STATUS_CONFIRMED)
+                .batchStatusName(dictService.batchStatusName(Constants.BATCH_STATUS_CONFIRMED))
+                .publishTime(batch.getPublishTime())
+                .build();
+    }
 
     /**
      * 产品批号唯一性校验（接口 10.8）：校验范围为当前企业。
@@ -439,14 +524,28 @@ public class EnterpriseBatchService {
     }
 
     /**
-     * 上游带出：类型 2/3/4 从上游批号继承品种、来源类型与上游企业信息。
+     * 品种与来源类型的来源，按环节区分：
+     *
+     * <ul>
+     *   <li>类型 1（捕捞与养殖）：链条源头，没有上游，品种与来源类型由前端录入；</li>
+     *   <li>类型 2/3/4：必须从上游批号带出，并同时继承上游企业的"所在省市"。</li>
+     * </ul>
+     *
+     * <p><b>为什么必须写在这里：</b>{@code product_batch.product_variety} 是 NOT NULL 且没有默认值，
+     * 早期版本对类型 1 直接 return，导致源头企业新建批号必然抛
+     * "Field 'product_variety' doesn't have a default value" 而保存失败。
      */
-    private void applyUpstreamIfNeeded(ProductBatch batch, BatchSaveRequest request, Integer type) {
-        if (type == null || type == Constants.ENTERPRISE_TYPE_FISHING) {
+    private void applyVarietyAndSource(ProductBatch batch, BatchSaveRequest request, Integer type) {
+        if (type == null) {
+            return;
+        }
+        if (type == Constants.ENTERPRISE_TYPE_FISHING) {
+            batch.setProductVariety(request.getProductVariety());
+            batch.setSourceType(request.getSourceType());
             return;
         }
         UpstreamService.UpstreamSelection selection = upstreamService.requireAvailableUpstreamBatch(
-                request.getUpstreamEnterpriseId(), request.getUpstreamBatchId());
+                type, request.getUpstreamEnterpriseId(), request.getUpstreamBatchId());
         ProductBatch upstream = selection.batch();
         com.fsts.trace.entity.NodeEnterprise upstreamEnterprise = selection.enterprise();
 
@@ -477,6 +576,8 @@ public class EnterpriseBatchService {
             if (batchMapper.publishIfNew(batch.getId(), user.getEnterpriseId(), now) > 0) {
                 batch.setBatchStatus(Constants.BATCH_STATUS_CONFIRMED);
                 batch.setPublishTime(now);
+                statusLogger.record(batch, Constants.BATCH_STATUS_NEW, Constants.BATCH_STATUS_CONFIRMED,
+                        BatchStatusLogger.ACTION_PUBLISH, null, user);
             }
             return null;
         }
@@ -714,6 +815,7 @@ public class EnterpriseBatchService {
             return null;
         }
         return ConfirmRequestBriefVO.builder()
+                .requestId(request.getId())
                 .requestNo(request.getRequestNo())
                 .requestStatus(request.getRequestStatus())
                 .requestStatusName(dictService.requestStatusName(request.getRequestStatus()))
@@ -749,6 +851,8 @@ public class EnterpriseBatchService {
                     throw BusinessException.of(ErrorCode.CONFLICT, "确认请求状态已变化，请刷新后重试");
                 }
                 markPending(user, batch);
+                statusLogger.record(batch, Constants.BATCH_STATUS_NEW, Constants.BATCH_STATUS_PENDING,
+                        BatchStatusLogger.ACTION_SEND_REQUEST, "复用原请求单号重新发起", user);
                 return existing.getRequestNo();
             }
             // 已确认（2）的请求不允许重发
@@ -772,6 +876,8 @@ public class EnterpriseBatchService {
         confirmRequestMapper.insert(entity);
 
         markPending(user, batch);
+        statusLogger.record(batch, Constants.BATCH_STATUS_NEW, Constants.BATCH_STATUS_PENDING,
+                BatchStatusLogger.ACTION_SEND_REQUEST, null, user);
         return entity.getRequestNo();
     }
 

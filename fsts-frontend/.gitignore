@@ -2,3 +2,8 @@ node_modules/
 dist/
 .env.local
 .env.*.local
+
+# Playwright 端到端测试产物（失败截图 / trace / HTML 报告）
+test-results/
+playwright-report/
+blob-report/

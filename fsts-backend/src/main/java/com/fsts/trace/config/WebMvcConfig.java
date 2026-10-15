@@ -3,12 +3,15 @@ package com.fsts.trace.config;
 import com.fsts.trace.web.AuthInterceptor;
 import com.fsts.trace.web.CurrentUserArgumentResolver;
 import com.fsts.trace.web.RateLimitInterceptor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.util.StringUtils;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -31,6 +34,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final AuthInterceptor authInterceptor;
     private final RateLimitInterceptor rateLimitInterceptor;
     private final CurrentUserArgumentResolver currentUserArgumentResolver;
+
+    /**
+     * 允许的跨域来源，逗号分隔；默认通配（开发期方便）。
+     * 生产环境务必通过 {@code fsts.cors.allowed-origin-patterns} 收窄为实际前端域名。
+     */
+    @Value("${fsts.cors.allowed-origin-patterns:*}")
+    private String allowedOriginPatterns;
 
     public WebMvcConfig(AuthInterceptor authInterceptor,
                         RateLimitInterceptor rateLimitInterceptor,
@@ -70,12 +80,17 @@ public class WebMvcConfig implements WebMvcConfigurer {
      * 反过来，一旦开启 allowCredentials，浏览器就允许跨站请求带上 Cookie，
      * 配合通配的来源模式等于把所有接口暴露给任意站点（CSRF 风险）。
      *
-     * <p>生产环境请把 allowedOriginPatterns 收窄为实际前端域名。
+     * <p>生产环境请把 {@code fsts.cors.allowed-origin-patterns} 收窄为实际前端域名，
+     * 例如 {@code FSTS_CORS_ORIGINS=https://trace.example.com}。
      */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        String[] patterns = Arrays.stream(StringUtils.commaDelimitedListToStringArray(allowedOriginPatterns))
+                .map(String::trim)
+                .filter(StringUtils::hasText)
+                .toArray(String[]::new);
         registry.addMapping("/api/**")
-                .allowedOriginPatterns("*")
+                .allowedOriginPatterns(patterns.length == 0 ? new String[]{"*"} : patterns)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .exposedHeaders("X-Trace-Id")

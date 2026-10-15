@@ -53,6 +53,21 @@ public interface BatchConfirmRequestMapper extends BaseMapper<BatchConfirmReques
                         @Param("handleRemark") String handleRemark);
 
     /**
+     * 并发安全的撤回（接口 11.5）：只有发起方本人、且仍处于"待确认"时才能撤回。
+     *
+     * <p>撤回后请求置为 4（已撤回），下游批号同步回退为"新建"，
+     * 与拒绝不同之处在于：撤回是发起方的自我修正，不会写入"处理说明"。
+     */
+    @Update("""
+            UPDATE batch_confirm_request
+               SET request_status = 4, handle_time = #{handleTime}, handle_remark = #{handleRemark}, update_time = NOW()
+             WHERE id = #{id} AND from_enterprise_id = #{fromEnterpriseId} AND request_status = 1
+            """)
+    int withdrawIfPending(@Param("id") Long id, @Param("fromEnterpriseId") Long fromEnterpriseId,
+                          @Param("handleTime") LocalDateTime handleTime,
+                          @Param("handleRemark") String handleRemark);
+
+    /**
      * 被拒绝后重新发起：复用原记录，重置为待确认（uk_request_batch 保证一批一号一请求）。
      */
     @Update("""

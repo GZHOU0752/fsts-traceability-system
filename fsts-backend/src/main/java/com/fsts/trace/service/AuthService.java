@@ -134,6 +134,33 @@ public class AuthService {
                 .build();
     }
 
+    /**
+     * 修改管理员密码（接口 4.8）。
+     *
+     * <p>与 4.6 保持同一套规则：原密码必须正确、两次新密码一致且不能与原密码相同；
+     * 成功后当前令牌立即进入黑名单，强制重新登录（改密即失效，避免旧令牌继续可用）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void adminChangePassword(LoginUser user, ChangePasswordRequest request, String rawToken) {
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw BusinessException.of(ErrorCode.PARAM_INVALID, "两次输入的新密码不一致");
+        }
+        SysAdmin admin = adminMapper.selectById(user.getUserId());
+        if (admin == null) {
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "管理员账号不存在");
+        }
+        if (!passwordEncoder.matches(request.getOldPassword(), admin.getPassword())) {
+            throw BusinessException.of(ErrorCode.PARAM_INVALID, "原密码不正确");
+        }
+        if (passwordEncoder.matches(request.getNewPassword(), admin.getPassword())) {
+            throw BusinessException.of(ErrorCode.PARAM_INVALID, "新密码不能与原密码相同");
+        }
+
+        adminMapper.updatePassword(admin.getId(), passwordEncoder.encode(request.getNewPassword()));
+        invalidateToken(rawToken, user);
+        log.info("管理员修改密码成功: adminId={}", admin.getId());
+    }
+
     // ------------------------------------------------------------------
     // 流通节点端
     // ------------------------------------------------------------------

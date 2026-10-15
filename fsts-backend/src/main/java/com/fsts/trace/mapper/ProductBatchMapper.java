@@ -79,6 +79,20 @@ public interface ProductBatchMapper extends BaseMapper<ProductBatch> {
                             @Param("remark") String remark);
 
     /**
+     * 恢复上架：已下架(4) -> 已确认/已发布(3)（接口 10.11）。
+     *
+     * <p>下架会连带失效溯源标识码，误操作的影响面很大，因此必须提供可逆路径；
+     * 恢复后清空下架时间，但保留备注（备注里通常写着当初下架的原因）。
+     */
+    @Update("""
+            UPDATE product_batch
+               SET batch_status = 3, off_shelf_time = NULL, update_time = NOW()
+             WHERE id = #{id} AND enterprise_id = #{enterpriseId}
+               AND batch_status = 4 AND deleted = 0
+            """)
+    int restoreIfOffShelf(@Param("id") Long id, @Param("enterpriseId") Long enterpriseId);
+
+    /**
      * 物理删除：仅允许删除"新建(1)"状态的本企业批号（接口 10.5）。
      * 明细 / 确认请求 / 溯源码由外键 ON DELETE CASCADE 同步清理。
      */

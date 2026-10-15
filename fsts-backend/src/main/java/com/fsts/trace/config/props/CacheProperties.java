@@ -20,4 +20,10 @@ public class CacheProperties {
 
     /** 区划缓存时长（秒） */
     private Long regionTtlSeconds = 86400L;
+
+    /**
+     * 大屏聚合结果缓存时长（秒），默认 30；设为 0 关闭。
+     * 企业数据变更时会主动失效，因此该 TTL 只影响"没有写操作时"的重复聚合查询。
+     */
+    private int statisticsTtlSeconds = 30;
 }

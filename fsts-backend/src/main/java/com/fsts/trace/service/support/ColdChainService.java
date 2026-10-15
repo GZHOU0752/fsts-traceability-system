@@ -3,6 +3,7 @@ package com.fsts.trace.service.support;
 import com.fsts.trace.common.BusinessException;
 import com.fsts.trace.common.Constants;
 import com.fsts.trace.common.ErrorCode;
+import com.fsts.trace.config.props.TraceProperties;
 import com.fsts.trace.dto.request.BatchSaveRequest;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +22,12 @@ import java.util.List;
  */
 @Component
 public class ColdChainService {
+
+    private final TraceProperties traceProperties;
+
+    public ColdChainService(TraceProperties traceProperties) {
+        this.traceProperties = traceProperties;
+    }
 
     /**
      * 判定结果：代表温度、本环节是否合格、超限说明列表。
@@ -41,24 +48,24 @@ public class ColdChainService {
         switch (enterpriseType) {
             case Constants.ENTERPRISE_TYPE_FISHING -> {
                 handoverTemp = request.getDepartureTemp();
-                checkNotExceed(violations, "起运温度", handoverTemp, Constants.TEMP_THRESHOLD_NORMAL);
+                checkNotExceed(violations, "起运温度", handoverTemp, traceProperties.getNormalTempThreshold());
             }
             case Constants.ENTERPRISE_TYPE_PROCESSING -> {
                 checkNotExceed(violations, "速冻中心温度", request.getQuickFreezeTemp(),
-                        Constants.TEMP_THRESHOLD_QUICK_FREEZE);
+                        traceProperties.getQuickFreezeTempThreshold());
                 // 代表温度取出厂温度
                 handoverTemp = request.getFactoryTemp();
-                checkNotExceed(violations, "出厂温度", handoverTemp, Constants.TEMP_THRESHOLD_NORMAL);
+                checkNotExceed(violations, "出厂温度", handoverTemp, traceProperties.getNormalTempThreshold());
             }
             case Constants.ENTERPRISE_TYPE_WHOLESALE -> {
-                checkNotExceed(violations, "入库温度", request.getInboundTemp(), Constants.TEMP_THRESHOLD_NORMAL);
-                checkNotExceed(violations, "冷库温度", request.getColdStorageTemp(), Constants.TEMP_THRESHOLD_NORMAL);
+                checkNotExceed(violations, "入库温度", request.getInboundTemp(), traceProperties.getNormalTempThreshold());
+                checkNotExceed(violations, "冷库温度", request.getColdStorageTemp(), traceProperties.getNormalTempThreshold());
                 handoverTemp = request.getOutboundTemp();
-                checkNotExceed(violations, "出库温度", handoverTemp, Constants.TEMP_THRESHOLD_NORMAL);
+                checkNotExceed(violations, "出库温度", handoverTemp, traceProperties.getNormalTempThreshold());
             }
             case Constants.ENTERPRISE_TYPE_RETAIL -> {
                 handoverTemp = request.getDisplayTemp();
-                checkNotExceed(violations, "冷冻陈列柜温度", handoverTemp, Constants.TEMP_THRESHOLD_NORMAL);
+                checkNotExceed(violations, "冷冻陈列柜温度", handoverTemp, traceProperties.getNormalTempThreshold());
             }
             default -> throw BusinessException.of(ErrorCode.PARAM_INVALID, "企业类型取值必须为 1~4");
         }

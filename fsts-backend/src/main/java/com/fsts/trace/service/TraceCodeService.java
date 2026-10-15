@@ -5,6 +5,7 @@ import com.fsts.trace.common.BusinessException;
 import com.fsts.trace.common.Constants;
 import com.fsts.trace.common.ErrorCode;
 import com.fsts.trace.common.ProvinceAbbr;
+import com.fsts.trace.common.util.TraceCodeCheckDigit;
 import com.fsts.trace.config.props.BatchProperties;
 import com.fsts.trace.config.props.TraceProperties;
 import com.fsts.trace.entity.BatchRetail;
@@ -12,6 +13,7 @@ import com.fsts.trace.entity.ProductBatch;
 import com.fsts.trace.entity.TraceCode;
 import com.fsts.trace.mapper.TraceCodeMapper;
 import com.fsts.trace.support.sequence.SequenceService;
+import com.fsts.trace.support.cache.CacheService;
 import com.fsts.trace.vo.PublicProductVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -40,19 +42,25 @@ public class TraceCodeService {
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd");
 
+    /** 与 TraceChainService 共用的溯源结果缓存命名空间 */
+    private static final String TRACE_CACHE_NAMESPACE = "trace";
+
     private final TraceCodeMapper traceCodeMapper;
     private final SequenceService sequenceService;
     private final TraceProperties traceProperties;
     private final BatchProperties batchProperties;
+    private final CacheService cacheService;
 
     public TraceCodeService(TraceCodeMapper traceCodeMapper,
                             SequenceService sequenceService,
                             TraceProperties traceProperties,
-                            BatchProperties batchProperties) {
+                            BatchProperties batchProperties,
+                            CacheService cacheService) {
         this.traceCodeMapper = traceCodeMapper;
         this.sequenceService = sequenceService;
         this.traceProperties = traceProperties;
         this.batchProperties = batchProperties;
+        this.cacheService = cacheService;
     }
 
     /**
@@ -79,6 +87,10 @@ public class TraceCodeService {
         for (int attempt = 1; attempt <= maxRetry; attempt++) {
             long seq = sequenceService.next("trace:" + datePart + ":" + abbr);
             String code = Constants.TRACE_CODE_PREFIX + datePart + "-" + abbr + "-" + String.format("%04d", seq);
+            // 追加校验位：让"错一位"与"真的查不到"能被区分开（详见 TraceCodeCheckDigit）
+            if (traceProperties.isCheckDigitEnabled()) {
+                code = TraceCodeCheckDigit.append(code);
+            }
 
             TraceCode entity = new TraceCode();
             entity.setTraceCode(code);
@@ -131,6 +143,29 @@ public class TraceCodeService {
         int affected = traceCodeMapper.invalidateByBatchId(batchId);
         if (affected > 0) {
             log.info("溯源标识码已失效: batchId={}", batchId);
+            evictCache(batchId);
+        }
+    }
+
+    /**
+     * 批号恢复上架时重新激活标识码（接口 10.11）。
+     *
+     * <p>与 {@link #invalidateByBatchId(Long)} 对称：下架只是"暂停对外服务"，
+     * 恢复上架后消费者应能重新查到同一串码，因此标识码本身不重新生成。
+     */
+    public void reactivateByBatchId(Long batchId) {
+        int affected = traceCodeMapper.reactivateByBatchId(batchId);
+        if (affected > 0) {
+            log.info("溯源标识码已重新激活: batchId={}", batchId);
+            evictCache(batchId);
+        }
+    }
+
+    /** 标识码状态变化后清理溯源结果缓存，避免"已下架还能查到" */
+    private void evictCache(Long batchId) {
+        TraceCode traceCode = getByBatchId(batchId);
+        if (traceCode != null) {
+            cacheService.evict(TRACE_CACHE_NAMESPACE, traceCode.getTraceCode());
         }
     }
 

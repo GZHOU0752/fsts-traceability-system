@@ -2,6 +2,7 @@ package com.fsts.trace.vo;
 
 import lombok.Builder;
 import lombok.Data;
+import lombok.extern.jackson.Jacksonized;
 
 import java.math.BigDecimal;
 
@@ -10,6 +11,7 @@ import java.math.BigDecimal;
  */
 @Data
 @Builder
+@Jacksonized
 public class ProvinceDistributionVO {
 
     private String provinceCode;

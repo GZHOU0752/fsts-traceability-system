@@ -27,6 +27,9 @@ export interface AdminInfo {
   userId?: string
   loginName?: string
   adminName?: string
+  phone?: string
+  email?: string
+  lastLoginTime?: string
   roles?: string[]
 }
 
@@ -130,6 +133,16 @@ export interface ProvinceDistribution { provinceCode: string; provinceName: stri
 export interface ProvinceCount { provinces: string[]; counts: number[] }
 export interface TypeDistribution { enterpriseType: number; enterpriseTypeName: string; count: number; percent: number }
 
+/** 大屏业务指标（接口 7.6）：与企业维度概览互补 */
+export interface BusinessMetrics {
+  totalBatchCount: number
+  activeBatchCount: number
+  coldChainAbnormalCount: number
+  pendingConfirmCount: number
+  validTraceCodeCount: number
+  updateTime?: string
+}
+
 export type BatchStatus = 1 | 2 | 3 | 4 | 5
 
 export interface BatchListItem {
@@ -150,9 +163,49 @@ export interface ProcessingInfo { processForm?: string; inspectionNo?: string; q
 export interface WholesaleInfo { wholesaleDate?: string; inboundTemp?: number; coldStorageTemp?: number; outboundTemp?: number; transportToolNo?: string; coldStorageNo?: string }
 export interface RetailInfo { shelfDate?: string; displayTemp?: number; saleStore?: string; displayEquipNo?: string }
 export interface TraceCodeInfo { traceCode: string; batchId?: string; batchNo?: string; productVariety?: string; saleStore?: string; qrContent?: string; status?: number; statusName?: string; generateTime?: string; queryCount?: number; lastQueryTime?: string }
-export interface ConfirmBrief { requestNo: string; requestStatus: number; requestStatusName: string; requestTime?: string; handleTime?: string; handleRemark?: string }
+export interface ConfirmBrief { requestId?: string; requestNo: string; requestStatus: number; requestStatusName: string; requestTime?: string; handleTime?: string; handleRemark?: string }
+
+/** 批号状态流转记录（接口 10.2 statusLogs） */
+export interface BatchStatusLog {
+  fromStatus?: number
+  fromStatusName?: string
+  toStatus: number
+  toStatusName?: string
+  action: string
+  operatorType?: string
+  operatorId?: string
+  operatorName?: string
+  remark?: string
+  createTime?: string
+}
+
+/** 批号发布/下架/恢复上架的结果（接口 10.6 / 10.7 / 10.11） */
+export interface BatchPublishResult {
+  id: string
+  batchNo: string
+  batchStatus: number
+  batchStatusName: string
+  publishTime?: string
+  offShelfTime?: string
+}
+
+/** 批量导入的单行结果（接口 10.12） */
+export interface BatchImportItemResult {
+  rowNo: number
+  batchNo?: string
+  success: boolean
+  message?: string
+  batchId?: string
+}
+
+export interface BatchImportResult {
+  total: number
+  successCount: number
+  failureCount: number
+  items: BatchImportItemResult[]
+}
 export interface BatchDetail extends BatchListItem {
-  enterpriseId?: string; enterpriseName?: string; enterpriseType?: number; enterpriseTypeName?: string; upstreamEnterpriseId?: string; upstreamEnterpriseName?: string; upstreamProvinceName?: string; upstreamCityName?: string; upstreamBatchId?: string; sourceType?: number; sourceTypeName?: string; publishTime?: string; offShelfTime?: string; remark?: string; createTime?: string; updateTime?: string; fishingInfo?: FishingInfo; processingInfo?: ProcessingInfo; wholesaleInfo?: WholesaleInfo; retailInfo?: RetailInfo; traceCode?: TraceCodeInfo; confirmRequest?: ConfirmBrief
+  enterpriseId?: string; enterpriseName?: string; enterpriseType?: number; enterpriseTypeName?: string; upstreamEnterpriseId?: string; upstreamEnterpriseName?: string; upstreamProvinceName?: string; upstreamCityName?: string; upstreamBatchId?: string; sourceType?: number; sourceTypeName?: string; publishTime?: string; offShelfTime?: string; remark?: string; createTime?: string; updateTime?: string; fishingInfo?: FishingInfo; processingInfo?: ProcessingInfo; wholesaleInfo?: WholesaleInfo; retailInfo?: RetailInfo; traceCode?: TraceCodeInfo; confirmRequest?: ConfirmBrief; statusLogs?: BatchStatusLog[]
 }
 
 export interface BatchForm {
@@ -160,9 +213,22 @@ export interface BatchForm {
 }
 
 export interface UpstreamEnterprise { id: string; enterpriseName: string; enterpriseCode?: string; enterpriseTypeName?: string; provinceName?: string; cityName?: string }
-export interface UpstreamBatch { id: string; batchNo: string; productVariety?: string; enterpriseName?: string; enterpriseTypeName?: string; publishTime?: string }
+export interface UpstreamBatch { id: string; batchNo: string; productVariety?: string; sourceType?: number; sourceTypeName?: string; enterpriseName?: string; enterpriseTypeName?: string; publishTime?: string; handoverTemp?: number; coldChainOk?: boolean }
 export interface ConfirmRequest { id: string; requestNo: string; batchId: string; batchNo: string; upstreamBatchId?: string; upstreamBatchNo?: string; fromEnterpriseId?: string; fromEnterpriseName?: string; fromEnterpriseType?: number; fromEnterpriseTypeName?: string; toEnterpriseId?: string; toEnterpriseName?: string; handoverTemp?: number; requestStatus: number; requestStatusName: string; requestTime?: string }
 export interface ConfirmRequestDetail extends ConfirmRequest { handleTime?: string; handleRemark?: string; downstreamBatch?: Record<string, unknown>; upstreamBatch?: Record<string, unknown> }
+
+/** 撤回进场确认请求结果（接口 11.5） */
+export interface WithdrawResult {
+  requestId: string
+  requestNo: string
+  requestStatus: number
+  requestStatusName: string
+  handleTime?: string
+  batchId: string
+  batchNo: string
+  batchStatus: number
+  batchStatusName: string
+}
 
 // 字段名以《前后端接口文档》12.1 的响应示例为准：曲线点用 recordTime 携带采样时间，并带合格阈值 threshold。
 export interface TemperaturePoint { stageCode?: number; stageName?: string; enterpriseName?: string; temperature?: number; threshold?: number; recordTime?: string; qualified?: boolean }

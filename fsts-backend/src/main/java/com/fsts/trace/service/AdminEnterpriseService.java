@@ -60,6 +60,7 @@ public class AdminEnterpriseService {
     private final SequenceService sequenceService;
     private final RegionService regionService;
     private final EnterpriseStatusChecker statusChecker;
+    private final AdminStatisticsService statisticsService;
 
     public AdminEnterpriseService(NodeEnterpriseMapper enterpriseMapper,
                                   EnterpriseConverter converter,
@@ -67,7 +68,8 @@ public class AdminEnterpriseService {
                                   PasswordEncoder passwordEncoder,
                                   SequenceService sequenceService,
                                   RegionService regionService,
-                                  EnterpriseStatusChecker statusChecker) {
+                                  EnterpriseStatusChecker statusChecker,
+                                  AdminStatisticsService statisticsService) {
         this.enterpriseMapper = enterpriseMapper;
         this.converter = converter;
         this.validator = validator;
@@ -75,6 +77,7 @@ public class AdminEnterpriseService {
         this.sequenceService = sequenceService;
         this.regionService = regionService;
         this.statusChecker = statusChecker;
+        this.statisticsService = statisticsService;
     }
 
     /**
@@ -145,6 +148,8 @@ public class AdminEnterpriseService {
             entity.setRegisterTime(LocalDateTime.now());
             enterpriseMapper.insert(entity);
         }
+        // 企业数变化会直接影响大屏统计，主动失效避免"刚录完还是旧数字"
+        statisticsService.evictCache();
 
         return EnterpriseCreateResultVO.builder()
                 .id(entity.getId())
@@ -178,6 +183,7 @@ public class AdminEnterpriseService {
 
         // 状态可能被改停用，立即刷新缓存
         statusChecker.evict(id);
+        statisticsService.evictCache();
     }
 
     /**
@@ -196,6 +202,7 @@ public class AdminEnterpriseService {
         // 逻辑删除（@TableLogic 生效，等价于 UPDATE ... SET deleted = 1）
         enterpriseMapper.deleteById(id);
         statusChecker.evict(id);
+        statisticsService.evictCache();
         log.info("节点企业已逻辑删除: id={} name={}", id, existing.getEnterpriseName());
     }
 

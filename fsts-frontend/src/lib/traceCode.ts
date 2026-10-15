@@ -8,7 +8,12 @@
  * 也可能只是裸码、带查询参数的链接或第三方打印机改写过的文本，因此统一经
  * extractTraceCode 归一化后再查询，避免"明明贴着码却查不到"。
  */
-export const TRACE_CODE_PATTERN = /^FSTS-\d{8}-[A-Z]{2}-\d{4}$/
+/**
+ * 末段校验位可选：新生成的码形如 FSTS-20260915-SH-0001-7，
+ * 历史数据（含演示数据）不带校验位，两种都要能识别，否则老标签会"扫得出来却判非法"。
+ * 校验位是否正确由服务端判定（见后端 TraceCodeCheckDigit），前端只负责格式与提取。
+ */
+export const TRACE_CODE_PATTERN = /^FSTS-\d{8}-[A-Z]{2}-\d{4}(-\d)?$/
 
 /** 后端默认的演示域名，说明该码未按实际部署环境配置。 */
 const PLACEHOLDER_HOST = /fsts\.example\.com/i
@@ -39,7 +44,7 @@ export function extractTraceCode(raw: string): string | null {
       return normalizeTraceCode(candidate)
     }
   }
-  const matched = normalizeTraceCode(text).match(/FSTS-\d{8}-[A-Z]{2}-\d{4}/)
+  const matched = normalizeTraceCode(text).match(/FSTS-\d{8}-[A-Z]{2}-\d{4}(?:-\d)?/)
   return matched ? matched[0] : null
 }
 

@@ -111,6 +111,8 @@ fsts:
     local-max-size: 10000
     dict-ttl-seconds: 1800
     region-ttl-seconds: 86400
+    # 大屏聚合结果缓存（秒）：0 表示关闭；企业增删改会主动失效
+    statistics-ttl-seconds: 30
   ratelimit:
     # 消费者端溯源查询限流（单实例令牌桶，Redis 开启时为全局限流）
     public-qps: 200
@@ -121,6 +123,14 @@ fsts:
   trace:
     # 二维码内容前缀（追溯页面链接）
     qr-base-url: https://fsts.example.com/trace/
+    # 冷冻海产品通用温度阈值（℃）与速冻中心温度阈值（℃）
+    # 默认值来自 GB 31605-2020；不同品类（如深冷金枪鱼）可通过环境变量覆盖
+    normal-temp-threshold: ${FSTS_TEMP_NORMAL:-18.00}
+    quick-freeze-temp-threshold: ${FSTS_TEMP_QUICK_FREEZE:-35.00}
+    # 消费者端溯源结果缓存（秒）：0 表示关闭；下架/恢复上架会主动失效
+    result-ttl-seconds: ${FSTS_TRACE_RESULT_TTL:60}
+    # 溯源码是否追加校验位（历史码不带校验位，仍可正常查询）
+    check-digit-enabled: ${FSTS_TRACE_CHECK_DIGIT:true}
     # 查询次数聚合落库间隔（毫秒）：把热点行 UPDATE 从读路径剥离
     query-count-flush-interval-ms: 5000
     # 单次聚合落库的最大条数

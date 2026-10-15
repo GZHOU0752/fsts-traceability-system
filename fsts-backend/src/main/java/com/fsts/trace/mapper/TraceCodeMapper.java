@@ -54,4 +54,10 @@ public interface TraceCodeMapper extends BaseMapper<TraceCode> {
      */
     @Update("UPDATE trace_code SET status = 0, update_time = NOW() WHERE batch_id = #{batchId} AND status = 1")
     int invalidateByBatchId(@Param("batchId") Long batchId);
+
+    /**
+     * 批号恢复上架时把标识码重新置为有效（接口 10.11）。
+     */
+    @Update("UPDATE trace_code SET status = 1, update_time = NOW() WHERE batch_id = #{batchId} AND status = 0")
+    int reactivateByBatchId(@Param("batchId") Long batchId);
 }

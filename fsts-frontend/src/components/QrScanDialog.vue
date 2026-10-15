@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { showError } from '@/lib/feedback'
 import { ElMessage } from 'element-plus'
 import { Camera, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import jsQR from 'jsqr'
@@ -192,7 +193,7 @@ async function decodeFile(file: File) {
     }
     ElMessage.warning(result?.data ? '这不是本系统的溯源码，请上传产品包装上的溯源码标签' : '没有识别到二维码，请换一张更清晰、完整的图片')
   } catch {
-    ElMessage.error('图片读取失败，请重新选择')
+    showError('图片读取失败，请重新选择')
   } finally {
     URL.revokeObjectURL(objectUrl)
   }

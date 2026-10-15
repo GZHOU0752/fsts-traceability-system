@@ -2,6 +2,7 @@ package com.fsts.trace.controller;
 
 import com.fsts.trace.common.Result;
 import com.fsts.trace.service.AdminStatisticsService;
+import com.fsts.trace.vo.BusinessMetricsVO;
 import com.fsts.trace.vo.OverviewVO;
 import com.fsts.trace.vo.ProvinceCountVO;
 import com.fsts.trace.vo.ProvinceDistributionVO;
@@ -57,5 +58,13 @@ public class AdminStatisticsController {
     @GetMapping("/type-distribution")
     public Result<List<TypeDistributionVO>> typeDistribution() {
         return Result.ok("查询成功", statisticsService.typeDistribution());
+    }
+
+    /**
+     * 7.6 业务指标卡片（在架批号 / 冷链异常 / 待确认请求 / 有效溯源码）。
+     */
+    @GetMapping("/business")
+    public Result<BusinessMetricsVO> business() {
+        return Result.ok("查询成功", statisticsService.businessMetrics());
     }
 }

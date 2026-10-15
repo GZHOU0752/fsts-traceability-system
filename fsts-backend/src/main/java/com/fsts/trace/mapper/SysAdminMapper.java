@@ -3,6 +3,7 @@ package com.fsts.trace.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.fsts.trace.entity.SysAdmin;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
 /**
@@ -16,4 +17,10 @@ public interface SysAdminMapper extends BaseMapper<SysAdmin> {
      */
     @Update("UPDATE sys_admin SET last_login_time = NOW() WHERE id = #{id}")
     int updateLastLoginTime(Long id);
+
+    /**
+     * 修改管理员密码（接口 4.8）。只更新密码列，避免整行更新。
+     */
+    @Update("UPDATE sys_admin SET password = #{password}, update_time = NOW() WHERE id = #{id}")
+    int updatePassword(@Param("id") Long id, @Param("password") String password);
 }

@@ -2,6 +2,7 @@ package com.fsts.trace.vo;
 
 import lombok.Builder;
 import lombok.Data;
+import lombok.extern.jackson.Jacksonized;
 
 import java.time.LocalDateTime;
 
@@ -10,6 +11,7 @@ import java.time.LocalDateTime;
  */
 @Data
 @Builder
+@Jacksonized
 public class OverviewVO {
 
     private Long totalCount;

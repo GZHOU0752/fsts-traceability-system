@@ -10,8 +10,6 @@ import lombok.EqualsAndHashCode;
 @EqualsAndHashCode(callSuper = true)
 public class AdminEnterpriseQuery extends PageQuery {
 
-    private Long id;
-
     /** 企业名称，模糊匹配 */
     private String enterpriseName;
 

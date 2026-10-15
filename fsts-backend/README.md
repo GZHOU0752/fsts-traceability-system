@@ -10,20 +10,22 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 代码实现 | 完成 | 154 个主代码文件 + 3 个测试类，39 个接口全部落地 |
+| 代码实现 | 完成 | 170 个主代码文件 + 5 个测试类，46 个接口全部落地 |
 | 编译 | 通过 | `mvn clean package` 产出可执行 Jar |
 | Spring 上下文装配 | 已验证 | `ApplicationContextTest` 校验 Bean 装配、13 个 Mapper 扫描、XML 映射解析 |
-| 单元测试 | 通过 | 7 项：种子密码 BCrypt、序列化契约、缓存往返、令牌唯一性 |
-| 真实 MySQL 联调 | **已完成** | MySQL 8.0.42 实跑，`scripts/api-smoke-test.ps1` 45 项断言全部通过 |
+| 单元测试 | 通过 | 后端 18 项 + 前端 44 项：上下文装配、序列化契约、缓存往返、令牌唯一性、表单必填口径、CSV 解析等 |
+| 真实 MySQL 联调 | **已完成** | MySQL 8.0.42 实跑，`scripts/api-smoke-test.ps1` 70 项断言全部通过 |
+| 端到端（浏览器） | **已完成** | `fsts-frontend` 下 `npm run test:e2e`：管理端资质表单、企业端建批号/撤回、消费者查询、角色菜单 4 条用例 |
+| 压测 | **已完成（20 并发）** | `scripts/load-test.mjs`：溯源查询 1222 QPS / P95 46ms（缓存开）、61 QPS / P95 356ms（缓存关） |
 | 演示数据脚本 | 已提供 | `sql/demo_data.sql`，16 家企业 / 7 个批号 / 完整溯源链 |
 | 并发正确性 | 已验证 | 20 个并发请求取号：单号唯一、号段连续、零重号 |
-| 性能压测 | **未进行** | 高并发设计已落地，但未做吞吐/延迟压测 |
+| 分布式形态验证 | **未进行** | Redis 模式（共享缓存、全局限流、跨实例令牌黑名单）未在真实集群上复验 |
 
-**结论**：接口功能已端到端验证通过，可用于联调与验收。
-但**尚未做性能压测**，高并发相关的设计（限流、热点写聚合、缓存）只验证了正确性，
-没有实测吞吐与延迟上限，投产前应补压测。
+**结论**：接口功能与界面主流程均已端到端验证通过，可用于联调与验收。
+单机 20 并发下的吞吐/延迟已有实测数据（见第十节），
+但**集群形态（Redis 开启）尚未复验**，投产前应在真实 Redis 上重跑冒烟与压测。
 
-### 联调中发现并修复的 5 个缺陷
+### 联调中发现并修复的 11 个缺陷
 
 以下问题编译期、上下文启动、单元测试都无法发现，只有连真实数据库跑接口才会暴露：
 
@@ -34,9 +36,20 @@
 | 3 | 首个确认请求单号是 `-0006` 而非 `-0001`；序列为 `6,2,3,4,5,6`，**第 6 次必然撞号** | `LAST_INSERT_ID(1)` 被表的 AUTO_INCREMENT 覆盖，读回的是自增主键 | 改为 UPSERT + `SELECT seq_value`，不依赖会话隐式状态 |
 | 4 | 改密码后重新登录，新令牌立刻提示"登录已失效" | 同一秒内为同一用户签发的 JWT 完全相同，黑名单按签名摘要做键会误杀新令牌 | 令牌增加随机 `jti` 声明，黑名单改用 `jti` |
 | 5 | 无 Redis 时幂等窗口是 5 分钟 | 本地分支用固定的 `expireAfterWrite`，忽略了注解上的 TTL | 本地占位改为每条自带 TTL |
+| 6 | 捕捞与养殖企业**新建批号必然失败**：`Field 'product_variety' doesn't have a default value` | `applyUpstreamIfNeeded` 对链条源头直接 `return`，品种与来源类型从未写入实体，而 `product_variety` 是 NOT NULL 且无默认值 | 改为 `applyVarietyAndSource`：源头环节取请求体字段，下游环节仍从上游带出 |
+| 7 | 管理端"新增企业"必然失败（400，但提示一闪而过，表现为"点了没反应"） | 前端表单没有资质字段；且未填初始密码时把 `password: ""` 也发了出去，命中 `@Size(min = 6)` | 前端按企业类型渲染资质字段并做同规则预校验；空密码直接不发该字段 |
+| 8 | 管理端省份下拉永远是"无数据" | `const provinces = dict.provinces` 捕获的是 Pinia store 里的旧数组引用，`loadProvinces()` 是整体替换 | 改为 `computed(() => dict.provinces)` |
+| 9 | 批号"下架"入口点不到；"发布"按钮对加工/批发/零售企业也会出现 | 前端把 `batchStatus = 4` 标成"已发布"，下架按钮挂在 4 上；后端 4 表示"已下架"且不可浏览，下架只允许从 3 发起 | 前端状态语义与常量对齐：下架挂在 3，发布按钮仅链条源头可见，列表分组改为新建/待确认/已确认 |
+| 10 | 温度超限只能看到报错，无法按设计"二次确认后强制提交" | 前端从不携带 `forceSubmit`，也没有 2004 的二次确认弹窗 | 前端捕获 `code = 2004` 弹确认框，确认后带 `forceSubmit = true` 重新提交 |
+| 11 | **链条可以越级挂靠**：零售企业直接把批号挂到捕捞企业的批号上，消费者端仍显示"冷链未断链" | 查询接口 9.1/9.2 按企业类型过滤了上游企业，但写入接口 10.3/10.4 只校验"批号存在且已发布"，没有比对上游企业类型 | `requireAvailableUpstreamBatch` 增加当前企业类型入参，与 `resolveUpstreamType` 比对，不匹配返回 400（与 9.2 同口径） |
 
-缺陷 1、3、4 都属于"设计时看着合理、真跑才暴露"的类型，已在
-`ContractSmokeTest` 中补了对应的回归测试。
+缺陷 6、7、8 属于"演示数据由 SQL 直接灌入、界面从不走这条路径"的类型，
+只在真实浏览器里点一遍才会暴露；已在 `ContractSmokeTest`（后端契约）与
+前端 `src/lib/*.test.ts`（表单必填规则与后端校验器对齐）中补了回归测试。
+
+缺陷 11 属于"接口层各自为政"的类型：查询接口做了类型过滤，写入接口忘了做，
+于是界面正常、直接调接口却能造出断链数据。除冒烟断言外，
+前端 e2e 也覆盖了"零售商菜单不含进场确认、上游下拉只出现合法企业"这类约束。
 
 ---
 
@@ -92,11 +105,20 @@ $root  = 'C:/Users/zhou/Desktop/冷冻海产品溯源系统'
 & $mysql -u root -p --default-character-set=utf8mb4 `
     -e "source $root/fsts-backend/sql/V2__add_sequence_table.sql"
 
-# 3) 演示数据（16 家企业 + 完整四环节溯源链，用于联调与验收）
+# 3) 增量：新增批号状态流转日志表 batch_status_log（V4）
+#    纯新增表，可重复执行
+& $mysql -u root -p --default-character-set=utf8mb4 `
+    -e "source $root/fsts-backend/sql/V4__batch_status_log.sql"
+
+# 4) 演示数据（16 家企业 + 完整四环节溯源链，用于联调与验收）
 & $mysql -u root -p --default-character-set=utf8mb4 `
     -e "source $root/fsts-backend/sql/demo_data.sql"
 
-# 4) 验证
+# 5) 可选：消费者端"按产品名称搜索"的补充演示数据
+& $mysql -u root -p --default-character-set=utf8mb4 `
+    -e "source $root/fsts-backend/sql/demo_extra_products.sql"
+
+# 6) 验证
 & $mysql -u root -p --default-character-set=utf8mb4 `
     -e "USE fsts_trace; SHOW TABLES; SELECT COUNT(*) FROM sys_region;"
 ```
@@ -109,6 +131,10 @@ $root  = 'C:/Users/zhou/Desktop/冷冻海产品溯源系统'
 
 > `sys_sequence` 是**必须执行**的增量表。没有它，企业编码、确认请求单号、
 > 溯源标识码在并发下会大量撞唯一索引。原因见第七节。
+>
+> `batch_status_log`（V4）同样必须执行，否则 10.2 详情的 `statusLogs` 会为空、
+> 状态流转写入失败（旁路写入，只告警不阻断业务）。它刻意**不建外键**：
+> 审计记录的价值在于业务数据被删除后仍然留存，同时避免重建库时的删除顺序依赖。
 
 ### 3.3 配置数据库连接
 
@@ -141,7 +167,7 @@ Invoke-RestMethod http://localhost:8080/actuator/health
 ### 3.5 冒烟验证（推荐）
 
 接口清单已固化为可重复执行的脚本，覆盖附录 G 的 14 条用例与鉴权/隔离/健康检查，
-共 **45 项断言**：
+共 **70 项断言**（含撤回、越级挂靠、恢复上架、批量导入、业务指标、溯源码校验位）：
 
 ```powershell
 # 建议先重置演示数据，保证断言依赖的初始状态一致
@@ -157,6 +183,18 @@ pwsh -File scripts/api-smoke-test.ps1 -BaseUrl http://localhost:8080
 > 脚本会修改数据（确认一条进场请求、新建并删除一个测试企业）。
 > 重复执行前请重新导入 `sql/demo_data.sql`，否则附录 G-9 依赖的"待确认请求"
 > 已被上一次运行确认掉。若只想验证只读接口，可从脚本中摘取对应片段。
+
+界面主流程另有一套浏览器端到端用例（覆盖"表单缺字段必然 400""按钮点了没反应"这类
+只有真点一遍才会暴露的问题）：
+
+```powershell
+# 前置：pwsh -File start-services.ps1（前后端已就绪）
+cd fsts-frontend
+npm run test:e2e        # 4 条用例：管理端资质表单、企业端建批号/撤回、消费者查询、角色菜单
+```
+
+> e2e 默认复用本机安装的 Chrome（`playwright.config.ts` 里的 `channel: 'chrome'`）。
+> 若机器上没有 Chrome，删掉该行并执行 `npx playwright install chromium`。
 
 ### 3.6 手工验证
 
@@ -242,7 +280,7 @@ Invoke-RestMethod http://localhost:8080/api/common/regions/provinces |
 三端以路径前缀隔离：`/api/admin`（管理端）、`/api/enterprise`（节点企业）、
 `/api/public` 与 `/api/common`（免登录）。
 
-### 5.1 认证模块（7 个）
+### 5.1 认证模块（8 个）
 
 | 编号 | 方法 | 路径 | 权限 | 控制器 |
 | --- | --- | --- | --- | --- |
@@ -253,6 +291,7 @@ Invoke-RestMethod http://localhost:8080/api/common/regions/provinces |
 | 4.5 | GET | `/api/enterprise/auth/info` | 企业 | `EnterpriseAuthController` |
 | 4.6 | PUT | `/api/enterprise/auth/password` | 企业 | `EnterpriseAuthController` |
 | 4.7 | POST | `/api/enterprise/auth/logout` | 企业 | `EnterpriseAuthController` |
+| 4.8 | PUT | `/api/admin/auth/password` | 管理员 | `AdminAuthController` |
 
 ### 5.2 公共基础数据（3 个）
 
@@ -273,7 +312,7 @@ Invoke-RestMethod http://localhost:8080/api/common/regions/provinces |
 | 6.5 | DELETE | `/api/admin/enterprises/{id}` |
 | 6.6 | GET | `/api/admin/enterprises/check-name` |
 
-### 5.4 管理端 · 可视化大屏（5 个）
+### 5.4 管理端 · 可视化大屏（6 个）
 
 | 编号 | 方法 | 路径 |
 | --- | --- | --- |
@@ -291,7 +330,7 @@ Invoke-RestMethod http://localhost:8080/api/common/regions/provinces |
 | 9.1 | GET | `/api/enterprise/upstream/enterprises` |
 | 9.2 | GET | `/api/enterprise/upstream/batches` |
 
-### 5.6 企业端 · 产品批号管理（10 个）
+### 5.6 企业端 · 产品批号管理（12 个）
 
 | 编号 | 方法 | 路径 |
 | --- | --- | --- |
@@ -306,7 +345,7 @@ Invoke-RestMethod http://localhost:8080/api/common/regions/provinces |
 | 10.9 | POST | `/api/enterprise/batches/{id}/confirm-request` |
 | 10.10 | GET | `/api/enterprise/batches/{id}/trace-code` |
 
-### 5.7 企业端 · 下游进场确认（4 个）
+### 5.7 企业端 · 下游进场确认（5 个）
 
 | 编号 | 方法 | 路径 |
 | --- | --- | --- |
@@ -314,12 +353,14 @@ Invoke-RestMethod http://localhost:8080/api/common/regions/provinces |
 | 11.2 | GET | `/api/enterprise/confirm-requests/{id}` |
 | 11.3 | PUT | `/api/enterprise/confirm-requests/{id}/confirm` |
 | 11.4 | PUT | `/api/enterprise/confirm-requests/{id}/reject` |
+| 11.5 | PUT | `/api/enterprise/confirm-requests/{id}/withdraw` |（仅发起方、仅待确认状态）|
 
-### 5.8 消费者端（1 个）
+### 5.8 消费者端（2 个）
 
 | 编号 | 方法 | 路径 | 权限 |
 | --- | --- | --- | --- |
 | 12.1 | GET | `/api/public/trace/{traceCode}` | 匿名 + 限流 |
+| 12.2 | GET | `/api/public/products` | 匿名 + 限流（按产品名称搜索） |
 
 ---
 
@@ -619,12 +660,38 @@ java -server \
 
 ---
 
-## 十、已知限制与后续工作
+## 十、实测性能（单机，2026-10-15）
+
+压测脚本：`scripts/load-test.mjs`（Node 18+，零依赖）。场景：消费者端溯源查询（12.1），
+并发 20、持续 10 秒，MySQL 8 与后端同机。
+
+| 场景 | 总请求 | QPS | avg | P95 | P99 | 错误 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 溯源结果缓存开启（默认 60s TTL） | 12116 | 1222.0 | 16.2 ms | 45.8 ms | 54.7 ms | 0 |
+| 溯源结果缓存关闭（`FSTS_TRACE_RESULT_TTL=0`） | 563 | 60.6 | 328.1 ms | 356.2 ms | 379.0 ms | 0 |
+
+结论与说明：
+
+- 未命中缓存时一次查询要跑 1 次标识码 + 1 次递归链 + 至多 4 次明细 + 1 次企业查询。
+  关闭缓存那一组还包含 dev profile 下 MyBatis 的 SQL 全量打印（`StdOutImpl`）开销，
+  因此这个对比应理解为"跳过查询 + 跳过日志"的合计收益，而不是纯 SQL 开销；
+  生产 profile 的日志级别更低，绝对数字会更好看。
+- 缓存只存"链路快照"（环节、温度、结论），查询次数仍实时自增；
+  批号下架/恢复上架会主动失效，不会出现"已下架还能查到"。
+- 本脚本只压只读接口；写入路径的并发正确性由 `sys_sequence` 原子取号与
+  CAS 条件更新（`WHERE batch_status = ?`）保证，另有 20 并发取号测试佐证。
+
+```powershell
+node scripts/load-test.mjs                                                          # 默认压溯源查询
+node scripts/load-test.mjs --path /api/common/regions/provinces --concurrency 50 --duration 15
+```
+
+## 十一、已知限制与后续工作
 
 功能与并发正确性已验证，以下是尚未覆盖的部分，按重要性排序：
 
-1. **未做性能压测**。限流、热点写聚合、两级缓存只验证了正确性，
-   没有实测 QPS 上限、P99 延迟与连接池饱和度，投产前必须补。
+1. **压测只覆盖到 20 并发**（见第十节）：已验证吞吐与延迟随缓存开关的变化，
+   但未测到服务端拐点（连接池饱和、限流触发点），也未做长时间稳定性压测。
 2. 未验证 **Redis 模式**下的行为（缓存共享、分布式限流、跨实例令牌黑名单）。
    本次联调 `fsts.redis.enabled=false`，走的是本地降级实现；
    集群部署前应在真实 Redis 上重跑一遍冒烟测试。
@@ -634,14 +701,14 @@ java -server \
    Elasticsearch 或 MySQL 全文索引。
 5. 限流按 IP 维度，未做基于用户 / 接口的细粒度熔断降级（可引入 Sentinel）。
 6. 未接入 Prometheus 指标导出（`micrometer-registry-prometheus` 未引入）。
-7. 未实现操作审计日志表（谁在何时改了哪条数据）。
+7. 审计留痕只覆盖**批号状态流转**（`batch_status_log`，接口 10.2 `statusLogs`）：
+   企业资质修改、停用/删除等管理端动作目前只有应用日志（带 traceId），
+   没有业务语义化的操作日志表。
 8. 未做读写分离。
-9. 消费者端未做缓存（每次溯源查询都要访问数据库）。当前 QPS 下无问题，
-   若溯源码成为热点，可为 `trace_code` 与溯源链结果加短 TTL 缓存。
 
 ---
 
-## 十一、常见问题
+## 十二、常见问题
 
 **Q：启动报 `fsts.jwt.secret 长度必须不少于 32 字节`？**
 

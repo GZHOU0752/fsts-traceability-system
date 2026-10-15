@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { showError } from '@/lib/feedback'
 import { ElMessage } from 'element-plus'
-import { Search, ArrowRight, CopyDocument, Refresh, Camera, Download, Link } from '@element-plus/icons-vue'
+import { Search, ArrowRight, CopyDocument, Refresh, Camera, Download, Link, Postcard, View } from '@element-plus/icons-vue'
 import { publicApi } from '@/api/public'
 import { ApiError } from '@/lib/http'
 import { writeClipboard } from '@/lib/clipboard'
@@ -27,7 +28,9 @@ const { detect, link } = useTraceLinkBase()
 const traceCode = ref(String(route.params.traceCode || ''))
 const loading = ref(false)
 const trace = ref<PublicTrace>()
-const state = ref<'idle' | 'ready' | 'not-found' | 'error'>('idle')
+const state = ref<'idle' | 'ready' | 'not-found' | 'invalid' | 'error'>('idle')
+/** 服务端返回的原始提示：3001 的"校验位不正确"这类文案比前端写死的更准确 */
+const errorMessage = ref('')
 const scanVisible = ref(false)
 const qrVisible = ref(false)
 const qrProduct = ref<PublicProduct>()
@@ -37,6 +40,18 @@ const productKeyword = ref('')
 const products = ref<PublicProduct[]>([])
 const searching = ref(false)
 const searched = ref(false)
+
+/**
+ * 溯源码手动查询入口。
+ *
+ * <p>需求规格说明书 6.1 的消费者用例是"输入溯源标识码获取溯源信息"，
+ * 但之前的首页只有"按产品名称搜索"，直接输入 FSTS-… 会走产品搜索接口
+ * （该接口只按品种模糊匹配）从而永远查不到，等于主入口缺失。
+ */
+const codeInput = ref('')
+const queriedByCode = ref(false)
+/** 扫码后默认只在手机上展开冷链；桌面端看二维码的用户可一键在本机查看 */
+const forceColdChain = ref(false)
 
 const hasTrace = computed(() => state.value === 'ready' && trace.value)
 
@@ -84,7 +99,19 @@ async function fetchProducts(keyword: string, signal?: AbortSignal, force = fals
 // 链接带 scan=1 标记：只有扫码打开时才展示完整冷链，桌面端只展示二维码
 const traceLink = computed(() => (trace.value?.traceCode ? withScanMarker(link(trace.value.traceCode)) : ''))
 const qrLink = computed(() => (qrProduct.value?.traceCode ? withScanMarker(link(qrProduct.value.traceCode)) : ''))
-const showColdChain = computed(() => route.query.scan === '1')
+const showColdChain = computed(() => route.query.scan === '1' || queriedByCode.value || forceColdChain.value)
+
+/** 错误态的标题与默认提示：3001（查无此码）/ 3002（已停止追溯）要给出不同的行动建议 */
+const notFoundTitle = computed(() => {
+  if (state.value === 'not-found') return '没有找到这串溯源码'
+  if (state.value === 'invalid') return '该批次已停止追溯服务'
+  return '暂时无法查询'
+})
+const notFoundHint = computed(() => {
+  if (state.value === 'not-found') return '请确认二维码或链接是否完整，或向销售方核实。'
+  if (state.value === 'invalid') return '对应批号已下架，商品可能已过季或停止销售。'
+  return '服务正在恢复，请稍后重试。'
+})
 
 async function loadTrace(value: string) {
   const input = value.trim()
@@ -99,13 +126,22 @@ async function loadTrace(value: string) {
     if (seq !== traceSeq) return
     trace.value = result
     state.value = 'ready'
+    codeInput.value = result.traceCode || code
     if (route.params.traceCode !== code) {
       router.replace(`/trace/${encodeURIComponent(code)}`)
     }
   } catch (error) {
     if (seq !== traceSeq) return
     trace.value = undefined
-    state.value = error instanceof ApiError && error.code === 3001 ? 'not-found' : 'error'
+    errorMessage.value = error instanceof ApiError ? error.message : ''
+    if (error instanceof ApiError && error.code === 3001) {
+      state.value = 'not-found'
+    } else if (error instanceof ApiError && error.code === 3002) {
+      // 3002 = 该批次已下架、溯源码已失效，与"查无此码"要区分开
+      state.value = 'invalid'
+    } else {
+      state.value = 'error'
+    }
   } finally {
     if (seq === traceSeq) loading.value = false
   }
@@ -127,7 +163,7 @@ async function searchProducts() {
   } catch {
     products.value = []
     searched.value = true
-    ElMessage.error('产品搜索失败，请稍后重试')
+    showError('产品搜索失败，请稍后重试')
   } finally {
     searching.value = false
   }
@@ -160,6 +196,18 @@ function querySearch(queryString: string, callback: (suggestions: Array<PublicPr
   }, 250)
 }
 
+/** 按溯源码查询（支持粘贴整段追溯链接或二维码内容，由 extractTraceCode 提取） */
+function searchByCode() {
+  const value = codeInput.value.trim()
+  if (!value) {
+    ElMessage.warning('请输入溯源码')
+    return
+  }
+  queriedByCode.value = true
+  void detect()
+  loadTrace(value)
+}
+
 function handleSelect(item: PublicProduct & { value?: string }) {
   openProduct(item)
 }
@@ -179,7 +227,16 @@ async function copy(value?: string, tip = '溯源码已复制') {
 }
 
 function downloadDialogQr() {
-  qrDialogRef.value?.download(qrProduct.value?.traceCode)
+  // 与 TraceQrDialog 同理：异步组件未就绪时给出提示，而不是静默无反应
+  if (!qrDialogRef.value) {
+    ElMessage.warning('二维码还在生成中，请稍后再试')
+    return
+  }
+  qrDialogRef.value.download(qrProduct.value?.traceCode)
+}
+
+function onQrError(message: string) {
+  ElMessage.warning(message)
 }
 
 function withScanMarker(url: string): string {
@@ -229,28 +286,42 @@ onBeforeUnmount(() => {
       <div class="trace-search__copy">
         <h2>输入产品名称，查询产品旅程</h2>
       </div>
-      <div class="trace-search__form">
-        <el-autocomplete
-          v-model="productKeyword"
-          :fetch-suggestions="querySearch"
-          :trigger-on-focus="true"
-          size="large"
-          placeholder="输入产品名称，如：带鱼"
-          clearable
-          @select="handleSelect"
-        >
-          <template #prefix><el-icon><Search /></el-icon></template>
-          <template #default="{ item }">
-            <div class="trace-suggestion">
-              <span class="trace-suggestion__name">{{ item.productVariety || item.batchNo }}</span>
-              <span class="trace-suggestion__meta">{{ [item.retailerName, item.saleStore].filter(Boolean).join(' · ') }}</span>
-            </div>
-          </template>
-        </el-autocomplete>
-        <el-button type="primary" size="large" :loading="searching" :icon="ArrowRight" @click="searchProducts">
-          搜索产品
-        </el-button>
-        <el-button size="large" :icon="Camera" @click="scanVisible = true">扫一扫</el-button>
+      <div class="trace-search__stack">
+        <div class="trace-search__form">
+          <el-autocomplete
+            v-model="productKeyword"
+            :fetch-suggestions="querySearch"
+            :trigger-on-focus="true"
+            size="large"
+            placeholder="输入产品名称，如：带鱼"
+            clearable
+            @select="handleSelect"
+          >
+            <template #prefix><el-icon><Search /></el-icon></template>
+            <template #default="{ item }">
+              <div class="trace-suggestion">
+                <span class="trace-suggestion__name">{{ item.productVariety || item.batchNo }}</span>
+                <span class="trace-suggestion__meta">{{ [item.retailerName, item.saleStore].filter(Boolean).join(' · ') }}</span>
+              </div>
+            </template>
+          </el-autocomplete>
+          <el-button type="primary" size="large" :loading="searching" :icon="ArrowRight" @click="searchProducts">
+            搜索产品
+          </el-button>
+          <el-button size="large" :icon="Camera" @click="scanVisible = true">扫一扫</el-button>
+        </div>
+        <div class="trace-code-form">
+          <el-input
+            v-model="codeInput"
+            size="large"
+            clearable
+            placeholder="或直接输入溯源码 / 粘贴追溯链接，如 FSTS-20260915-SH-0001"
+            @keyup.enter="searchByCode"
+          >
+            <template #prefix><el-icon><Postcard /></el-icon></template>
+          </el-input>
+          <el-button size="large" :icon="Search" @click="searchByCode">按溯源码查询</el-button>
+        </div>
       </div>
     </section>
 
@@ -312,6 +383,7 @@ onBeforeUnmount(() => {
           <div><dt>流转环节</dt><dd>{{ trace!.links?.length ?? 0 }} 个</dd></div>
         </dl>
         <p class="trace-scan-only__hint">扫码需手机与电脑处于同一 Wi-Fi。</p>
+        <el-button :icon="View" @click="forceColdChain = true">在本机查看完整冷链</el-button>
       </div>
       <TraceQrCode
         :value="traceLink"
@@ -339,8 +411,8 @@ onBeforeUnmount(() => {
 
     <section v-else class="trace-placeholder trace-placeholder--error">
       <div class="trace-placeholder__number">!</div>
-      <h3>{{ state === 'not-found' ? '没有找到这串溯源码' : '暂时无法查询' }}</h3>
-      <p>{{ state === 'not-found' ? '请确认二维码或链接是否完整，或向销售方核实。' : '服务正在恢复，请稍后重试。' }}</p>
+      <h3>{{ notFoundTitle }}</h3>
+      <p>{{ errorMessage || notFoundHint }}</p>
       <el-button :icon="Refresh" @click="retry">重新查询</el-button>
     </section>
 
@@ -361,6 +433,7 @@ onBeforeUnmount(() => {
           :code="qrProduct.traceCode"
           :size="220"
           caption="用微信扫一扫，即可查看该产品的完整冷链过程"
+          @error="onQrError"
         />
       </div>
       <template #footer>
@@ -372,6 +445,40 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 右侧两行查询区：第一行按产品名称，第二行按溯源码。
+   原布局把 .trace-search 设计成"左文案 + 右表单"两列，
+   这里把右侧包成一层 stack，保证新增溯源码输入框不会挤坏整体对齐。 */
+.trace-search__stack {
+  display: grid;
+  gap: 10px;
+  min-width: 540px;
+}
+
+.trace-code-form {
+  display: flex;
+  gap: 8px;
+}
+
+.trace-code-form .el-input {
+  flex: 1;
+}
+
+.trace-code-form .el-button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 980px) {
+  .trace-search__stack {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .trace-code-form {
+    flex-direction: column;
+  }
+}
+
 .product-results {
   margin: -18px 46px 26px;
   padding: 20px 22px;

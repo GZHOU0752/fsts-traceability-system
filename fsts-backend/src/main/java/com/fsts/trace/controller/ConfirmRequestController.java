@@ -12,6 +12,7 @@ import com.fsts.trace.vo.ConfirmRequestListItemVO;
 import com.fsts.trace.vo.ConfirmResultVO;
 import com.fsts.trace.vo.PageVO;
 import com.fsts.trace.vo.RejectResultVO;
+import com.fsts.trace.vo.WithdrawResultVO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -67,6 +68,17 @@ public class ConfirmRequestController {
                                          @Valid @RequestBody RejectRequest request) {
         return Result.ok("已拒绝进场确认请求",
                 confirmRequestService.reject(currentUser(), id, request.getHandleRemark()));
+    }
+
+    /**
+     * 11.5 撤回进场确认请求（扩展功能，仅发起方在上游处理前可用）。
+     */
+    @Idempotent(ttlSeconds = 3, message = "撤回操作正在处理中，请勿重复提交")
+    @PutMapping("/{id}/withdraw")
+    public Result<WithdrawResultVO> withdraw(@PathVariable("id") Long id,
+                                             @RequestBody(required = false) HandleRemarkRequest request) {
+        String remark = request == null ? null : request.getHandleRemark();
+        return Result.ok("已撤回进场确认请求", confirmRequestService.withdraw(currentUser(), id, remark));
     }
 
     /**

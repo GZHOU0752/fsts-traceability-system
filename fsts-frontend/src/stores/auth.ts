@@ -17,6 +17,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => Boolean(session.value?.token && role.value))
   const displayName = computed(() => session.value?.adminName || session.value?.enterpriseName || session.value?.loginName || '访客')
+  /** 当前登录企业的环节类型（1 捕捞与养殖 / 2 冷冻加工 / 3 批发 / 4 零售），管理员为 null */
+  const enterpriseType = computed(() => (role.value === 'enterprise' ? session.value?.enterpriseType ?? null : null))
 
   function setSession(nextRole: UserRole, data: Partial<AdminLogin & EnterpriseLogin> & { token: string }) {
     const next = { ...data, role: nextRole } as Session
@@ -55,7 +57,25 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  window.addEventListener('fsts:unauthorized', clearSession)
+  /**
+   * 令牌失效（401）统一处理：清空会话并回到对应端的登录页。
+   * 之前只清空会话不跳转，用户会停在受保护页面上看到空白/报错，
+   * 与接口文档 3.6"401 → 清空本地 Token，跳转登录页"的约定不一致。
+   */
+  function handleUnauthorized() {
+    const wasAdmin = role.value === 'admin'
+    const hadSession = Boolean(role.value)
+    clearSession()
+    if (typeof window === 'undefined' || !hadSession) {
+      return
+    }
+    const target = wasAdmin ? '/admin/login' : '/enterprise/login'
+    if (window.location.pathname !== target) {
+      window.location.replace(`${target}?expired=1`)
+    }
+  }
 
-  return { role, session, profile, isAuthenticated, displayName, setSession, clearSession, login, loadProfile, logout }
+  window.addEventListener('fsts:unauthorized', handleUnauthorized)
+
+  return { role, session, profile, isAuthenticated, displayName, enterpriseType, setSession, clearSession, login, loadProfile, logout }
 })
